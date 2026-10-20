@@ -1,0 +1,80 @@
+-- A course registration metamodel in OCLinEcore: Ecore classes with embedded OCL
+-- (invariants, a derived property, operation bodies, pre- and postconditions).
+--
+-- Validate the model in university.hutn against it:
+--   oxy run university.oclinecore university.hutn
+-- Export it as an .ecore file:
+--   oxy convert university.oclinecore -o university.ecore
+
+package university : uni = 'http://www.example.org/university/1.0' {
+  class University {
+    attribute name : String;
+    property courses : Course[*] { ordered, composes };
+    property students : Student[*] { ordered, composes };
+  }
+
+  enum Kind {
+    literal LECTURE;
+    literal SEMINAR;
+    literal PROJECT;
+  }
+
+  class Course {
+    attribute code : String { id };
+    attribute title : String;
+    attribute kind : Kind;
+    attribute credits : Integer;
+    attribute capacity : Integer;
+    property prerequisites : Course[*];
+    property enrolments#course : Enrolment[*];
+
+    operation participants() : Student[*] {
+      body: enrolments.student->asSet();
+      postcondition AllEnrolled: result->forAll(s | s.enrolments.course->includes(self));
+    }
+
+    -- Deliberately off by one: a full course still reports a free seat. The postcondition
+    -- catches it for every course that is full.
+    operation hasSeat() : Boolean {
+      body: enrolments->size() <= capacity;
+      postcondition FreeSeat: result = (participants()->size() < capacity);
+    }
+
+    invariant NotOverbooked('Course ' + code + ' has ' + enrolments->size().toString()
+                            + ' participants but only ' + capacity.toString() + ' seats'):
+      enrolments->size() <= capacity;
+  }
+
+  class Student {
+    attribute name : String;
+    attribute semester : Integer;
+    property enrolments#student : Enrolment[*] { composes };
+    property credits : Integer { derived, readonly, transient, volatile } {
+      derivation: enrolments.course.credits->sum();
+    }
+
+    operation passed(course : Course) : Boolean {
+      body: enrolments->exists(e | e.course = course and e.grade <> null and e.grade <= 4);
+    }
+
+    operation mayEnrol(course : Course) : Boolean {
+      precondition NotEnrolled('already enrolled in ' + course.code):
+        not enrolments.course->includes(course);
+      body: course.prerequisites->forAll(p | passed(p)) and course.hasSeat();
+      postcondition PrerequisitesPassed: result implies course.prerequisites->forAll(p | passed(p));
+    }
+
+    invariant CreditLimit('Student ' + name + ' takes ' + credits.toString() + ' credits'):
+      credits <= 30;
+    invariant PrerequisitesMet:
+      enrolments->forAll(e | e.grade <> null or e.course.prerequisites->forAll(p | passed(p)));
+  }
+
+  class Enrolment {
+    property student#enrolments : Student;
+    property course#enrolments : Course;
+    -- 1 (best) to 5 (failed); unset while the course is in progress.
+    attribute grade : Integer[?];
+    invariant ValidGrade: grade <> null implies (grade >= 1 and grade <= 5);
+  }
+}

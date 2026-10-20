@@ -1,0 +1,505 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "OCL",
+  "scopeName": "source.ocl",
+  "fileTypes": [
+    "ocl"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#import"
+    },
+    {
+      "include": "#package"
+    },
+    {
+      "include": "#context"
+    },
+    {
+      "include": "#definition"
+    },
+    {
+      "include": "#constraint-header"
+    },
+    {
+      "include": "#expression"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.ocl",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.ocl"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.ocl"
+            }
+          }
+        },
+        {
+          "name": "comment.line.double-dash.ocl",
+          "match": "(--).*$",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.ocl"
+            }
+          }
+        }
+      ]
+    },
+    "import": {
+      "match": "\\b(import)\\b(?=\\s*(?:'|[\\p{L}_$]|$))(?:\\s+([\\p{L}_$][\\w$]*)\\s*(:)(?!:))?",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.ocl"
+        },
+        "2": {
+          "name": "entity.name.namespace.ocl"
+        },
+        "3": {
+          "name": "punctuation.separator.colon.ocl"
+        }
+      }
+    },
+    "package": {
+      "patterns": [
+        {
+          "match": "\\b(package)\\s+((?:[\\p{L}_$][\\w$]*\\s*::\\s*)*[\\p{L}_$][\\w$]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.package.ocl"
+            },
+            "2": {
+              "name": "entity.name.namespace.ocl",
+              "patterns": [
+                {
+                  "match": "::",
+                  "name": "punctuation.separator.namespace.ocl"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "match": "\\b(?:package|endpackage)\\b",
+          "name": "keyword.other.package.ocl"
+        }
+      ]
+    },
+    "context": {
+      "patterns": [
+        {
+          "comment": "context Class::operation(...)",
+          "match": "\\b(context)\\s+((?:[\\p{L}_$][\\w$]*\\s*::\\s*)+)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "keyword.other.context.ocl"
+            },
+            "2": {
+              "name": "entity.name.type.class.ocl",
+              "patterns": [
+                {
+                  "match": "::",
+                  "name": "punctuation.separator.namespace.ocl"
+                }
+              ]
+            },
+            "3": {
+              "name": "entity.name.function.ocl"
+            }
+          }
+        },
+        {
+          "comment": "context Class::property : Type",
+          "match": "\\b(context)\\s+((?:[\\p{L}_$][\\w$]*\\s*::\\s*)+)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?=\\s*:(?!:))",
+          "captures": {
+            "1": {
+              "name": "keyword.other.context.ocl"
+            },
+            "2": {
+              "name": "entity.name.type.class.ocl",
+              "patterns": [
+                {
+                  "match": "::",
+                  "name": "punctuation.separator.namespace.ocl"
+                }
+              ]
+            },
+            "3": {
+              "name": "variable.other.property.ocl"
+            }
+          }
+        },
+        {
+          "comment": "context [self :] pkg::Class",
+          "match": "\\b(context)\\s+(?:([\\p{L}_$][\\w$]*)\\s*(:)(?!:)\\s*)?((?:[\\p{L}_$][\\w$]*\\s*::\\s*)*)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+          "captures": {
+            "1": {
+              "name": "keyword.other.context.ocl"
+            },
+            "2": {
+              "name": "variable.parameter.ocl"
+            },
+            "3": {
+              "name": "punctuation.separator.colon.ocl"
+            },
+            "4": {
+              "name": "entity.name.namespace.ocl",
+              "patterns": [
+                {
+                  "match": "::",
+                  "name": "punctuation.separator.namespace.ocl"
+                }
+              ]
+            },
+            "5": {
+              "name": "entity.name.type.class.ocl"
+            }
+          }
+        },
+        {
+          "match": "\\bcontext\\b",
+          "name": "keyword.other.context.ocl"
+        }
+      ]
+    },
+    "definition": {
+      "patterns": [
+        {
+          "comment": "[static] def [name]: operation(...)",
+          "match": "\\b(?:(static)\\s+)?(def)\\b\\s*(?:([\\p{L}_$][\\w$]*)\\s*)?(:)(?!:)\\s*((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.static.ocl"
+            },
+            "2": {
+              "name": "keyword.other.def.ocl"
+            },
+            "3": {
+              "name": "entity.name.function.constraint.ocl"
+            },
+            "4": {
+              "name": "punctuation.separator.colon.ocl"
+            },
+            "5": {
+              "name": "entity.name.function.ocl"
+            }
+          }
+        },
+        {
+          "comment": "[static] def [name]: attribute",
+          "match": "\\b(?:(static)\\s+)?(def)\\b\\s*(?:([\\p{L}_$][\\w$]*)\\s*)?(:)(?!:)(?:\\s*((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)))?",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.static.ocl"
+            },
+            "2": {
+              "name": "keyword.other.def.ocl"
+            },
+            "3": {
+              "name": "entity.name.function.constraint.ocl"
+            },
+            "4": {
+              "name": "punctuation.separator.colon.ocl"
+            },
+            "5": {
+              "name": "variable.other.property.ocl"
+            }
+          }
+        },
+        {
+          "match": "\\b(?:(static)\\s+)?(def)\\b",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.static.ocl"
+            },
+            "2": {
+              "name": "keyword.other.def.ocl"
+            }
+          }
+        }
+      ]
+    },
+    "constraint-header": {
+      "comment": "inv/pre/post/body/init/derive, an optional name, then ':' or a message in parentheses",
+      "match": "\\b(inv|pre|post|body|init|derive)\\b(?:\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)))?(?=\\s*(?:\\(|:(?!:)|$))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.constraint.ocl"
+        },
+        "2": {
+          "name": "entity.name.function.constraint.ocl"
+        }
+      }
+    },
+    "expression": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#quoted-name"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#at-pre"
+        },
+        {
+          "include": "#navigation"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#function-call"
+        },
+        {
+          "include": "#enum-literal"
+        },
+        {
+          "include": "#class-name"
+        },
+        {
+          "include": "#identifier"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "quoted-name": {
+      "match": "_'(?:[^'\\\\]|\\\\.)*'",
+      "name": "variable.other.quoted.ocl"
+    },
+    "strings": {
+      "comment": "Strings end at the closing quote or, unterminated, at the end of the line.",
+      "name": "string.quoted.single.ocl",
+      "begin": "'",
+      "end": "'|$",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.ocl"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.ocl"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[ntrbf'\"\\\\]|u[0-9A-Fa-f]{4})",
+          "name": "constant.character.escape.ocl"
+        },
+        {
+          "match": "\\\\.",
+          "name": "invalid.illegal.escape.ocl"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "match": "\\b\\d+(?:\\.\\d+(?:[eE][+-]?\\d+)?|[eE][+-]?\\d+)\\b",
+          "name": "constant.numeric.float.ocl"
+        },
+        {
+          "match": "\\b\\d+\\b",
+          "name": "constant.numeric.integer.ocl"
+        }
+      ]
+    },
+    "at-pre": {
+      "match": "@pre\\b",
+      "name": "keyword.other.at-pre.ocl"
+    },
+    "navigation": {
+      "patterns": [
+        {
+          "match": "(\\?->|->)\\s*(forAll|exists|select|reject|collect|collectNested|iterate|any|one|isUnique|sortedBy|closure|selectByKind|selectByType)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.arrow.ocl"
+            },
+            "2": {
+              "name": "support.function.iterator.ocl"
+            }
+          }
+        },
+        {
+          "match": "(?:(\\?->|->)|(\\?\\.|\\.(?!\\.)))\\s*((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.arrow.ocl"
+            },
+            "2": {
+              "name": "keyword.operator.navigation.ocl"
+            },
+            "3": {
+              "name": "entity.name.function.member.ocl"
+            }
+          }
+        },
+        {
+          "match": "(?:(\\?->|->)|(\\?\\.|\\.(?!\\.)))\\s*((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.arrow.ocl"
+            },
+            "2": {
+              "name": "keyword.operator.navigation.ocl"
+            },
+            "3": {
+              "name": "variable.other.property.ocl"
+            }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "\\?->|->",
+          "name": "keyword.operator.arrow.ocl"
+        },
+        {
+          "match": "\\.\\.",
+          "name": "keyword.operator.range.ocl"
+        },
+        {
+          "match": "\\?\\.|\\.",
+          "name": "keyword.operator.navigation.ocl"
+        },
+        {
+          "match": "::",
+          "name": "punctuation.separator.namespace.ocl"
+        },
+        {
+          "match": "<>|<=|>=|=|<|>",
+          "name": "keyword.operator.comparison.ocl"
+        },
+        {
+          "match": "[+\\-*/]",
+          "name": "keyword.operator.arithmetic.ocl"
+        },
+        {
+          "match": "\\^\\^|\\^",
+          "name": "keyword.operator.message.ocl"
+        },
+        {
+          "match": "\\|",
+          "name": "keyword.operator.iterator.ocl"
+        },
+        {
+          "match": "[@#!?]",
+          "name": "keyword.operator.ocl"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(?:if|then|else|elseif|endif|let|in)\\b",
+          "name": "keyword.control.ocl"
+        },
+        {
+          "match": "\\b(?:and|or|xor|not|implies)\\b",
+          "name": "keyword.operator.expression.logical.ocl"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "match": "\\b(?:true|false)\\b",
+          "name": "constant.language.boolean.ocl"
+        },
+        {
+          "match": "\\b(?:null|invalid)\\b",
+          "name": "constant.language.ocl"
+        },
+        {
+          "match": "\\bself\\b",
+          "name": "variable.language.self.ocl"
+        },
+        {
+          "match": "\\bresult\\b",
+          "name": "variable.language.result.ocl"
+        }
+      ]
+    },
+    "types": {
+      "match": "\\b(?:Boolean|Integer|Real|String|UnlimitedNatural|OclAny|OclVoid|OclInvalid|OclType|OclElement|OclMessage|OclState|Set|Bag|Sequence|OrderedSet|Collection|Tuple|Map)\\b",
+      "name": "support.type.ocl"
+    },
+    "function-call": {
+      "match": "(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)(?=\\s*\\()",
+      "name": "entity.name.function.ocl"
+    },
+    "enum-literal": {
+      "comment": "An upper-case name after '::' (`Kind::LECTURE`) is an enumeration literal.",
+      "match": "(?<=::)\\p{Lu}[\\p{Lu}\\d_]+\\b(?!\\s*(?:::|\\())",
+      "name": "variable.other.enummember.ocl"
+    },
+    "class-name": {
+      "match": "\\b\\p{Lu}[\\w$]*",
+      "name": "entity.name.type.ocl"
+    },
+    "identifier": {
+      "match": "[\\p{L}_$][\\w$]*",
+      "name": "variable.other.ocl"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[()]",
+          "name": "punctuation.section.parens.ocl"
+        },
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.braces.ocl"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.section.brackets.ocl"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.ocl"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.ocl"
+        },
+        {
+          "match": ":",
+          "name": "punctuation.separator.colon.ocl"
+        }
+      ]
+    }
+  }
+}

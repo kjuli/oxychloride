@@ -1,0 +1,260 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "HUTN",
+  "scopeName": "source.hutn",
+  "fileTypes": [
+    "hutn"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#annotation"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#slot"
+    },
+    {
+      "include": "#metamodel"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#negated-adjective"
+    },
+    {
+      "include": "#qualified-class"
+    },
+    {
+      "include": "#package-block"
+    },
+    {
+      "include": "#enum-literal"
+    },
+    {
+      "include": "#class-name"
+    },
+    {
+      "include": "#adjective"
+    },
+    {
+      "include": "#identifier"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.hutn",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.hutn"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.hutn"
+            }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.hutn",
+          "match": "(//).*$",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.hutn"
+            }
+          }
+        }
+      ]
+    },
+    "annotation": {
+      "match": "(@)([\\p{L}_][\\w]*)",
+      "name": "storage.type.annotation.hutn",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.annotation.hutn"
+        }
+      }
+    },
+    "metamodel": {
+      "match": "\\bmetamodel\\b",
+      "name": "keyword.other.metamodel.hutn"
+    },
+    "strings": {
+      "comment": "Strings end at the closing quote or, unterminated, at the end of the line (like the HUTN lexer).",
+      "patterns": [
+        {
+          "name": "string.quoted.double.hutn",
+          "begin": "\"",
+          "end": "\"|$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.hutn"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.hutn"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.hutn"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.hutn",
+          "begin": "'",
+          "end": "'|$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.hutn"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.hutn"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.hutn"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "match": "(?<![\\w.])-?\\d+(?:\\.\\d+(?:[eE][+-]?\\d+)?|[eE][+-]?\\d+)\\b",
+          "name": "constant.numeric.float.hutn"
+        },
+        {
+          "match": "(?<![\\w.])-?\\d+\\b",
+          "name": "constant.numeric.integer.hutn"
+        }
+      ]
+    },
+    "slot": {
+      "comment": "feature: values",
+      "match": "([\\p{L}_][\\w]*)\\s*(:)(?!:)",
+      "captures": {
+        "1": {
+          "name": "variable.other.property.hutn"
+        },
+        "2": {
+          "name": "punctuation.separator.key-value.hutn"
+        }
+      }
+    },
+    "constants": {
+      "patterns": [
+        {
+          "match": "\\b(?:true|false)\\b",
+          "name": "constant.language.boolean.hutn"
+        },
+        {
+          "match": "\\bnull\\b",
+          "name": "constant.language.null.hutn"
+        }
+      ]
+    },
+    "negated-adjective": {
+      "match": "(~)\\s*([\\p{L}_][\\w]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.negation.hutn"
+        },
+        "2": {
+          "name": "entity.other.attribute-name.adjective.hutn"
+        }
+      }
+    },
+    "qualified-class": {
+      "match": "((?:[\\p{L}_][\\w]*\\s*::\\s*)+)([\\p{L}_][\\w]*)",
+      "captures": {
+        "1": {
+          "name": "entity.name.namespace.hutn",
+          "patterns": [
+            {
+              "match": "::",
+              "name": "punctuation.separator.namespace.hutn"
+            }
+          ]
+        },
+        "2": {
+          "name": "entity.name.type.class.hutn"
+        }
+      }
+    },
+    "package-block": {
+      "comment": "A lower-case name followed by '{' is a package block (`library { ... }`).",
+      "match": "\\b(?:\\p{Ll}|_)[\\w]*(?=\\s*\\{)",
+      "name": "entity.name.namespace.hutn"
+    },
+    "enum-literal": {
+      "comment": "Enumeration literals are usually upper case; an upper-case class still precedes an identifier or '{'.",
+      "match": "\\b\\p{Lu}[\\p{Lu}\\d_]+\\b(?!\\s*[\"'{])",
+      "name": "variable.other.enummember.hutn"
+    },
+    "class-name": {
+      "match": "\\b\\p{Lu}[\\w]*",
+      "name": "entity.name.type.class.hutn"
+    },
+    "adjective": {
+      "comment": "A lower-case word before a class name is an adjective (`nuclear Family \"x\" {}`).",
+      "match": "\\b(?:\\p{Ll}|_)[\\w]*(?=\\s+(?:~?\\s*(?:\\p{Ll}|_)[\\w]*\\s+)*(?:[\\p{L}_][\\w]*\\s*::\\s*)*\\p{Lu})",
+      "name": "entity.other.attribute-name.adjective.hutn"
+    },
+    "identifier": {
+      "match": "[\\p{L}_][\\w]*",
+      "name": "variable.other.hutn"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "::",
+          "name": "punctuation.separator.namespace.hutn"
+        },
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.braces.hutn"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.section.brackets.hutn"
+        },
+        {
+          "match": ":",
+          "name": "punctuation.separator.key-value.hutn"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.hutn"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.hutn"
+        }
+      ]
+    }
+  }
+}

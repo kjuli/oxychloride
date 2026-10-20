@@ -1,0 +1,26 @@
+-- Additional constraints for the library metamodel (Complete OCL).
+-- Run with:  oxy run examples/library/library.ocl --model examples/library/library.xmi
+
+import 'library.ecore'
+
+package library
+
+context Library
+-- Book titles must be unique within a library.
+inv UniqueTitles: books->isUnique(name)
+-- Every loaned book must belong to this library.
+inv LoansReferToOwnBooks: loans->forAll(l | books->includes(l.book))
+
+context Book
+inv NonNegativeCopies: copies >= 0
+inv HasIsbn('Book \'' + name + '\' has no ISBN'): not isbn.oclIsUndefined() and isbn.size() > 0
+def: borrowers : Set(Member) = library.loans->select(book = self).member->asSet()
+
+context Member
+inv Adult('Member ' + name + ' is ' + age.toString() + ' years old'): age >= 18
+inv NoDuplicateLoans: loans.book->isUnique(b | b)
+
+context Book::isAvailable() : Boolean
+post: result = (loanCount < copies)
+
+endpackage

@@ -1,0 +1,81 @@
+import { EditorView } from "@codemirror/view";
+
+// The editor reads all colours from CSS custom properties defined in styles.css, so it
+// follows the light/dark scheme without reconfiguration.
+export const editorTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    color: "var(--ink)",
+    backgroundColor: "var(--editor-bg)",
+    fontSize: "13px",
+  },
+  "&.cm-focused": { outline: "none" },
+  ".cm-scroller": {
+    fontFamily: "var(--font-code)",
+    lineHeight: "1.6",
+  },
+  ".cm-content": { caretColor: "var(--accent)", padding: "8px 0" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, ::selection":
+    { backgroundColor: "var(--selection)" },
+  ".cm-gutters": {
+    backgroundColor: "var(--editor-bg)",
+    color: "var(--faint)",
+    border: "none",
+    borderRight: "1px solid var(--rule-soft)",
+  },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 10px 0 14px", minWidth: "36px" },
+  ".cm-activeLine": { backgroundColor: "var(--active-line)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--active-line)", color: "var(--muted)" },
+  ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": {
+    backgroundColor: "var(--bracket-match)",
+    outline: "1px solid var(--accent-soft)",
+    color: "inherit",
+  },
+  ".cm-nonmatchingBracket": { color: "var(--sev-error)" },
+  ".cm-selectionMatch": { backgroundColor: "var(--selection-match)" },
+  ".cm-foldGutter .cm-gutterElement": { color: "var(--faint)", padding: "0 4px" },
+  ".cm-tooltip": {
+    backgroundColor: "var(--surface-raised)",
+    color: "var(--ink)",
+    border: "1px solid var(--rule)",
+    borderRadius: "6px",
+    boxShadow: "var(--shadow-pop)",
+    fontFamily: "var(--font-ui)",
+    fontSize: "12px",
+    overflow: "hidden",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: "var(--font-code)", fontSize: "12px", maxHeight: "16em" },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li": { padding: "2px 10px 2px 4px" },
+  ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent)", color: "var(--on-accent)" },
+  ".cm-completionDetail": { color: "var(--muted)", fontStyle: "normal", marginLeft: "1em" },
+  ".cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail": { color: "inherit", opacity: "0.8" },
+  ".cm-completionMatchedText": { textDecoration: "none", fontWeight: "700" },
+  ".cm-diagnostic": { padding: "6px 10px", borderLeftWidth: "3px", fontFamily: "var(--font-ui)" },
+  ".cm-diagnostic-error": { borderLeftColor: "var(--sev-error)" },
+  ".cm-diagnostic-warning": { borderLeftColor: "var(--sev-warning)" },
+  ".cm-diagnostic-info": { borderLeftColor: "var(--sev-info)" },
+  ".cm-diagnosticSource": { color: "var(--muted)", opacity: "1" },
+  ".cm-lintRange-error": {
+    backgroundImage: "none",
+    textDecoration: "underline wavy var(--sev-error)",
+    textDecorationSkipInk: "none",
+    textUnderlineOffset: "3px",
+  },
+  ".cm-lintRange-warning": {
+    backgroundImage: "none",
+    textDecoration: "underline wavy var(--sev-warning)",
+    textDecorationSkipInk: "none",
+    textUnderlineOffset: "3px",
+  },
+  ".cm-lintRange-info": {
+    backgroundImage: "none",
+    textDecoration: "underline dotted var(--sev-info)",
+    textUnderlineOffset: "3px",
+  },
+  ".cm-panels": { backgroundColor: "var(--surface)", color: "var(--ink)" },
+  ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--rule)" },
+  ".cm-searchMatch": { backgroundColor: "var(--search-match)" },
+  ".cm-searchMatch-selected": { backgroundColor: "var(--selection)" },
+  ".cm-textfield, .cm-button": { fontFamily: "var(--font-ui)", fontSize: "12px" },
+});

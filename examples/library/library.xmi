@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<library:Library xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:library="http://www.example.org/library/1.0" xsi:schemaLocation="http://www.example.org/library/1.0 library.ecore" name="City Library">
+  <books name="Dune" isbn="978-0441013593" copies="2" genre="FICTION" authors="//@authors.0"/>
+  <books name="A Brief History of Time" isbn="978-0553380163" copies="1" genre="SCIENCE"/>
+  <books name="The Guns of August" copies="0" genre="HISTORY"/>
+  <members name="Alice" age="34" loans="//@loans.0 //@loans.1"/>
+  <members name="Bob" age="16" loans="//@loans.2"/>
+  <members name="Carol" age="51"/>
+  <members name="Frank" age="80"/>
+  <loans book="//@books.0" member="//@members.0" date="2026-09-01"/>
+  <loans book="//@books.1" member="//@members.0" date="2026-09-03"/>
+  <loans book="//@books.1" member="//@members.1" date="2026-09-07"/>
+  <authors name="Frank Herbert" age="65"/>
+</library:Library>

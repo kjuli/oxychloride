@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<net:Network xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:net="http://example.org/net"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://example.org/net net.ecore">
+  <nodes id="A1" name="a1" next="A2">
+    <next href="b.xmi#B1"/>
+    <next href="pathmap://LIB/lib.xmi#L1"/>
+  </nodes>
+  <nodes id="A2" name="a2"/>
+</net:Network>

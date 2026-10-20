@@ -1,0 +1,505 @@
+{
+  "name": "oxychloride",
+  "displayName": "Oxychloride: OCL for Ecore models",
+  "description": "Metamodels in OCLinEcore, models in HUTN and XMI, checked live against their OCL invariants, pre- and postconditions; an OCL console.",
+  "version": "0.1.0",
+  "publisher": "palladio",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/palladio/oxychloride"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "OCL",
+    "Ecore",
+    "EMF",
+    "OCLinEcore",
+    "HUTN",
+    "XMI"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi}",
+    "onLanguage:xml"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ocl",
+        "aliases": [
+          "Complete OCL",
+          "ocl"
+        ],
+        "extensions": [
+          ".ocl"
+        ],
+        "configuration": "./language-configuration/ocl.json",
+        "icon": {
+          "light": "./media/file-icons/ocl.svg",
+          "dark": "./media/file-icons/ocl-dark.svg"
+        }
+      },
+      {
+        "id": "oclinecore",
+        "aliases": [
+          "OCLinEcore",
+          "oclinecore"
+        ],
+        "extensions": [
+          ".oclinecore"
+        ],
+        "configuration": "./language-configuration/oclinecore.json",
+        "icon": {
+          "light": "./media/file-icons/oclinecore.svg",
+          "dark": "./media/file-icons/oclinecore-dark.svg"
+        }
+      },
+      {
+        "id": "hutn",
+        "aliases": [
+          "HUTN",
+          "hutn"
+        ],
+        "extensions": [
+          ".hutn"
+        ],
+        "configuration": "./language-configuration/hutn.json",
+        "icon": {
+          "light": "./media/file-icons/hutn.svg",
+          "dark": "./media/file-icons/hutn-dark.svg"
+        }
+      },
+      {
+        "id": "xml",
+        "extensions": [
+          ".xmi",
+          ".ecore"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ocl",
+        "scopeName": "source.ocl",
+        "path": "./syntaxes/ocl.tmLanguage.json"
+      },
+      {
+        "language": "oclinecore",
+        "scopeName": "source.oclinecore",
+        "path": "./syntaxes/oclinecore.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.ocl": "ocl"
+        }
+      },
+      {
+        "language": "hutn",
+        "scopeName": "source.hutn",
+        "path": "./syntaxes/hutn.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Oxychloride",
+      "properties": {
+        "oxychloride.server.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path of the `oxy` executable that runs the language server (`oxy lsp`). Empty: the one bundled with the extension, else `target/debug/oxy` or `target/release/oxy` of an Oxychloride checkout in the workspace, else `oxy` on the `PATH`."
+        },
+        "oxychloride.generateEcoreOnSave": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When an OCLinEcore metamodel (`.oclinecore`) is saved, write its `.ecore` (XML) next to it, e.g. `university.ecore` for `university.oclinecore`. Skipped while the metamodel has errors."
+        },
+        "oxychloride.xmlSchemas": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Generate XML Schemas for the loaded metamodels and register them with the XML extension (`redhat.vscode-xml`), so that XMI models are validated and completed as XML."
+        },
+        "oxychloride.validation.includeSatisfied": {
+          "type": "boolean",
+          "default": false,
+          "description": "List satisfied constraints in the validation results too."
+        },
+        "oxychloride.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the communication with the language server."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "oxychloride",
+          "title": "Oxychloride",
+          "icon": "media/oxychloride.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "oxychloride-console",
+          "title": "OCL Console",
+          "icon": "media/oxychloride.svg"
+        }
+      ]
+    },
+    "views": {
+      "oxychloride": [
+        {
+          "id": "oxychloride.metamodels",
+          "name": "Metamodels"
+        },
+        {
+          "id": "oxychloride.models",
+          "name": "Models"
+        },
+        {
+          "id": "oxychloride.validation",
+          "name": "Validation"
+        }
+      ],
+      "oxychloride-console": [
+        {
+          "type": "webview",
+          "id": "oxychloride.console",
+          "name": "OCL Console"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "oxychloride.metamodels",
+        "contents": "No metamodel loaded. Write one in an .oclinecore file, or load an .ecore file.\n[Load .ecore Metamodel](command:oxychloride.loadMetamodel)"
+      },
+      {
+        "view": "oxychloride.models",
+        "contents": "No model open. Open a .hutn or .xmi model, or create one from a class of a metamodel.\n[New Model](command:oxychloride.newModel)\n[Load XMI Model](command:oxychloride.loadModel)"
+      },
+      {
+        "view": "oxychloride.validation",
+        "contents": "Check the models against all invariants, pre- and postconditions.\n[Validate Models](command:oxychloride.validate)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "oxychloride.createInstance",
+        "title": "Create Instance",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.createInstanceInNewModel",
+        "title": "Create Instance in New Model",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.createXmiInstance",
+        "title": "Create Dynamic Instance (XMI)…",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.newModel",
+        "title": "New Model (HUTN)",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.addChild",
+        "title": "Add Child…",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.useAsContext",
+        "title": "Use as Evaluation Context",
+        "category": "Oxychloride",
+        "icon": "$(target)"
+      },
+      {
+        "command": "oxychloride.showDefinition",
+        "title": "Show Definition",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.evaluate",
+        "title": "Evaluate OCL Expression…",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.evaluateSelection",
+        "title": "Evaluate Selection in OCL Console",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.openConsole",
+        "title": "Open OCL Console",
+        "category": "Oxychloride",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "oxychloride.validate",
+        "title": "Validate Models",
+        "category": "Oxychloride",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "oxychloride.loadMetamodel",
+        "title": "Load .ecore Metamodel…",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.loadModel",
+        "title": "Load XMI Model…",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.generateEcore",
+        "title": "Generate .ecore",
+        "category": "Oxychloride",
+        "icon": "$(file-symlink-file)"
+      },
+      {
+        "command": "oxychloride.exportEcore",
+        "title": "Export as .ecore",
+        "category": "Oxychloride",
+        "icon": "$(export)"
+      },
+      {
+        "command": "oxychloride.exportXmi",
+        "title": "Export as XMI",
+        "category": "Oxychloride",
+        "icon": "$(export)"
+      },
+      {
+        "command": "oxychloride.convertToText",
+        "title": "Convert to OCLinEcore / HUTN",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.exportSchema",
+        "title": "Export XML Schema (.xsd)",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.refresh",
+        "title": "Refresh",
+        "category": "Oxychloride",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "oxychloride.restartServer",
+        "title": "Restart Language Server",
+        "category": "Oxychloride"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "oxychloride.refresh",
+          "when": "view == oxychloride.metamodels || view == oxychloride.models",
+          "group": "navigation"
+        },
+        {
+          "command": "oxychloride.validate",
+          "when": "view == oxychloride.validation || view == oxychloride.models",
+          "group": "navigation"
+        },
+        {
+          "command": "oxychloride.openConsole",
+          "when": "view == oxychloride.models",
+          "group": "navigation"
+        },
+        {
+          "command": "oxychloride.loadMetamodel",
+          "when": "view == oxychloride.metamodels"
+        },
+        {
+          "command": "oxychloride.loadModel",
+          "when": "view == oxychloride.models"
+        },
+        {
+          "command": "oxychloride.newModel",
+          "when": "view == oxychloride.models"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "oxychloride.createInstance",
+          "when": "view == oxychloride.metamodels && viewItem == class",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.createInstance",
+          "when": "view == oxychloride.metamodels && viewItem == class",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.createInstanceInNewModel",
+          "when": "view == oxychloride.metamodels && viewItem == class",
+          "group": "1_create@2"
+        },
+        {
+          "command": "oxychloride.createXmiInstance",
+          "when": "view == oxychloride.metamodels && viewItem == class",
+          "group": "1_create@3"
+        },
+        {
+          "command": "oxychloride.newModel",
+          "when": "view == oxychloride.metamodels && viewItem == package",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.exportSchema",
+          "when": "view == oxychloride.metamodels && viewItem == package",
+          "group": "2_export@1"
+        },
+        {
+          "command": "oxychloride.addChild",
+          "when": "view == oxychloride.models && viewItem == editableObject",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.addChild",
+          "when": "view == oxychloride.models && viewItem == editableObject",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.useAsContext",
+          "when": "view == oxychloride.models && viewItem =~ /[oO]bject$/",
+          "group": "2_context@1"
+        },
+        {
+          "command": "oxychloride.showDefinition",
+          "when": "view == oxychloride.models && viewItem =~ /[oO]bject$/ || view == oxychloride.validation && viewItem == result",
+          "group": "2_context@2"
+        },
+        {
+          "command": "oxychloride.useAsContext",
+          "when": "view == oxychloride.validation && viewItem == result",
+          "group": "2_context@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "oxychloride.generateEcore",
+          "when": "editorLangId == oclinecore && resourceScheme == file",
+          "group": "navigation"
+        },
+        {
+          "command": "oxychloride.exportEcore",
+          "when": "editorLangId == oclinecore",
+          "group": "1_export@2"
+        },
+        {
+          "command": "oxychloride.exportXmi",
+          "when": "editorLangId == hutn",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "oxychloride.evaluateSelection",
+          "when": "editorHasSelection && editorLangId =~ /^(ocl|oclinecore)$/",
+          "group": "navigation@9"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "oxychloride.generateEcore",
+          "when": "resourceExtname == .oclinecore",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.convertToText",
+          "when": "resourceExtname == .ecore || resourceExtname == .xmi",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.loadMetamodel",
+          "when": "resourceExtname == .ecore",
+          "group": "7_modification"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "oxychloride.createInstance",
+          "when": "false"
+        },
+        {
+          "command": "oxychloride.createInstanceInNewModel",
+          "when": "false"
+        },
+        {
+          "command": "oxychloride.createXmiInstance",
+          "when": "false"
+        },
+        {
+          "command": "oxychloride.addChild",
+          "when": "false"
+        },
+        {
+          "command": "oxychloride.useAsContext",
+          "when": "false"
+        },
+        {
+          "command": "oxychloride.showDefinition",
+          "when": "false"
+        },
+        {
+          "command": "oxychloride.exportEcore",
+          "when": "editorLangId == oclinecore"
+        },
+        {
+          "command": "oxychloride.exportXmi",
+          "when": "editorLangId == hutn"
+        },
+        {
+          "command": "oxychloride.evaluateSelection",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "oxychloride.generateEcore",
+          "when": "editorLangId == oclinecore"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "oxychloride.evaluateSelection",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "editorTextFocus && editorHasSelection && editorLangId =~ /^(ocl|oclinecore)$/"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && tsc -p test && node test/out/run.js",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "vscode-languageclient": "10.1.2"
+  },
+  "devDependencies": {
+    "@types/mocha": "10.0.10",
+    "@types/node": "22.18.0",
+    "@types/vscode": "1.100.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "mocha": "12.0.3",
+    "typescript": "5.9.3"
+  }
+}

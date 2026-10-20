@@ -1,0 +1,10 @@
+[package]
+name = "oxy-ecore"
+description = "Ecore metamodels and XMI instance models for the Oxychloride OCL engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quick-xml.workspace = true
+indexmap.workspace = true

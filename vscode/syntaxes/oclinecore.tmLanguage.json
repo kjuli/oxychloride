@@ -1,0 +1,440 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "OCLinEcore",
+  "scopeName": "source.oclinecore",
+  "fileTypes": [
+    "oclinecore"
+  ],
+  "patterns": [
+    {
+      "include": "source.ocl#comments"
+    },
+    {
+      "include": "#constraint"
+    },
+    {
+      "include": "#module"
+    },
+    {
+      "include": "#import"
+    },
+    {
+      "include": "#package"
+    },
+    {
+      "include": "#classifier"
+    },
+    {
+      "include": "#extends"
+    },
+    {
+      "include": "#feature"
+    },
+    {
+      "include": "#operation"
+    },
+    {
+      "include": "#literal"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#qualifiers"
+    },
+    {
+      "include": "#type-annotation"
+    },
+    {
+      "include": "#multiplicity"
+    },
+    {
+      "include": "#enum-literal"
+    },
+    {
+      "include": "source.ocl#quoted-name"
+    },
+    {
+      "include": "source.ocl#strings"
+    },
+    {
+      "include": "source.ocl#numbers"
+    },
+    {
+      "include": "source.ocl#types"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "source.ocl#punctuation"
+    },
+    {
+      "include": "source.ocl#class-name"
+    },
+    {
+      "include": "source.ocl#identifier"
+    }
+  ],
+  "repository": {
+    "constraint": {
+      "comment": "invariant Name('message'): <OCL>; (and the other constraint kinds). The OCL ends at ';'.",
+      "name": "meta.constraint.oclinecore",
+      "contentName": "meta.embedded.ocl",
+      "begin": "\\b(?:(callable)\\s+)?(invariant|inv|precondition|pre|postcondition|post|body|derivation|derive|initial|init)\\b(?:\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)))?(?=\\s*(?:\\(|:(?!:)|;|$))",
+      "end": "(;)|(?=^\\s*(?:(?:static|definition|abstract|primitive|callable)\\s+)*(?:attribute|property|operation|class|interface|datatype|enum|package|invariant|precondition|postcondition|derivation|initial|literal|annotation|documentation)\\b)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.modifier.callable.oclinecore"
+        },
+        "2": {
+          "name": "keyword.other.constraint.oclinecore"
+        },
+        "3": {
+          "name": "entity.name.function.constraint.oclinecore"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.terminator.statement.oclinecore"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ocl#expression"
+        }
+      ]
+    },
+    "module": {
+      "match": "\\b(module)\\s+([\\p{L}_$][\\w$]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.other.module.oclinecore"
+        },
+        "2": {
+          "name": "entity.name.namespace.oclinecore"
+        }
+      }
+    },
+    "import": {
+      "match": "\\b(import|library)\\b(?:\\s+([\\p{L}_$][\\w$]*)\\s*(:)(?!:))?",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.oclinecore"
+        },
+        "2": {
+          "name": "entity.name.namespace.oclinecore"
+        },
+        "3": {
+          "name": "punctuation.separator.colon.oclinecore"
+        }
+      }
+    },
+    "package": {
+      "match": "\\b(package)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?:\\s*(:)(?!:)\\s*([\\p{L}_$][\\w$]*))?",
+      "captures": {
+        "1": {
+          "name": "keyword.other.package.oclinecore"
+        },
+        "2": {
+          "name": "entity.name.namespace.oclinecore"
+        },
+        "3": {
+          "name": "punctuation.separator.colon.oclinecore"
+        },
+        "4": {
+          "name": "entity.name.namespace.prefix.oclinecore"
+        }
+      }
+    },
+    "classifier": {
+      "patterns": [
+        {
+          "match": "\\b((?:(?:abstract|primitive)\\s+)*)(enum)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+          "captures": {
+            "1": {
+              "patterns": [
+                {
+                  "include": "#qualifiers"
+                },
+                {
+                  "include": "#keywords"
+                }
+              ]
+            },
+            "2": {
+              "name": "storage.type.enum.oclinecore"
+            },
+            "3": {
+              "name": "entity.name.type.enum.oclinecore"
+            }
+          }
+        },
+        {
+          "match": "\\b((?:(?:abstract|primitive)\\s+)*)(class|interface|datatype)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+          "captures": {
+            "1": {
+              "patterns": [
+                {
+                  "include": "#keywords"
+                }
+              ]
+            },
+            "2": {
+              "name": "storage.type.class.oclinecore"
+            },
+            "3": {
+              "name": "entity.name.type.class.oclinecore"
+            }
+          }
+        }
+      ]
+    },
+    "extends": {
+      "begin": "\\b(extends)\\b",
+      "end": "(?=[{;]|(?<!:):(?!:))|$",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.modifier.extends.oclinecore"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ocl#comments"
+        },
+        {
+          "match": "::",
+          "name": "punctuation.separator.namespace.oclinecore"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.oclinecore"
+        },
+        {
+          "include": "source.ocl#types"
+        },
+        {
+          "match": "(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)",
+          "name": "entity.other.inherited-class.oclinecore"
+        }
+      ]
+    },
+    "feature": {
+      "match": "\\b((?:(?:static|definition)\\s+)*)(attribute|property)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?:\\s*(#)\\s*((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)))?",
+      "captures": {
+        "1": {
+          "patterns": [
+            {
+              "include": "#qualifiers"
+            }
+          ]
+        },
+        "2": {
+          "name": "storage.type.property.oclinecore"
+        },
+        "3": {
+          "name": "variable.other.property.oclinecore"
+        },
+        "4": {
+          "name": "keyword.operator.opposite.oclinecore"
+        },
+        "5": {
+          "name": "variable.other.property.oclinecore"
+        }
+      }
+    },
+    "operation": {
+      "begin": "\\b((?:(?:static|definition)\\s+)*)(operation)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))\\s*(\\()",
+      "end": "(\\))|(?=;)",
+      "beginCaptures": {
+        "1": {
+          "patterns": [
+            {
+              "include": "#qualifiers"
+            }
+          ]
+        },
+        "2": {
+          "name": "storage.type.function.oclinecore"
+        },
+        "3": {
+          "name": "entity.name.function.oclinecore"
+        },
+        "4": {
+          "name": "punctuation.section.parens.begin.oclinecore"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.section.parens.end.oclinecore"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ocl#comments"
+        },
+        {
+          "match": "(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)(?=\\s*:(?!:))",
+          "name": "variable.parameter.oclinecore"
+        },
+        {
+          "include": "#type-annotation"
+        },
+        {
+          "include": "#multiplicity"
+        },
+        {
+          "include": "#qualifiers"
+        },
+        {
+          "include": "source.ocl#types"
+        },
+        {
+          "include": "source.ocl#punctuation"
+        },
+        {
+          "include": "source.ocl#class-name"
+        },
+        {
+          "include": "source.ocl#identifier"
+        }
+      ]
+    },
+    "literal": {
+      "match": "\\b(literal)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.literal.oclinecore"
+        },
+        "2": {
+          "name": "variable.other.enummember.oclinecore"
+        }
+      }
+    },
+    "enum-literal": {
+      "comment": "An enumeration literal without 'literal': `NAME = 1;`, `NAME : 'x';` or `NAME;` at the start of a line or after ';'/'{'.",
+      "match": "(?:^|(?<=[;{]))\\s*(?!(?:module|import|library|package|class|abstract|interface|extends|datatype|primitive|enum|literal|attribute|property|operation|throws|annotation|documentation|callable|key|invariant|inv|precondition|pre|postcondition|post|body|derivation|derive|initial|init|composes|derived|id|ordered|readonly|resolve|transient|unique|unsettable|volatile|serializable|static|definition)\\b)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?=\\s*(?:[=;{]|:(?!:)))",
+      "captures": {
+        "1": {
+          "name": "variable.other.enummember.oclinecore"
+        }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(?:class|interface|datatype|enum|attribute|property|operation)\\b",
+          "name": "storage.type.oclinecore"
+        },
+        {
+          "match": "\\b(?:abstract|primitive)\\b",
+          "name": "storage.modifier.oclinecore"
+        },
+        {
+          "match": "\\b(?:import|library)\\b",
+          "name": "keyword.control.import.oclinecore"
+        },
+        {
+          "match": "\\b(?:module|package|extends|literal|throws|annotation|documentation|callable|key)\\b",
+          "name": "keyword.other.oclinecore"
+        }
+      ]
+    },
+    "qualifiers": {
+      "match": "(!)?\\s*\\b(composes|derived|id|ordered|readonly|resolve|transient|unique|unsettable|volatile|serializable|static|definition)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.negation.oclinecore"
+        },
+        "2": {
+          "name": "storage.modifier.oclinecore"
+        }
+      }
+    },
+    "type-annotation": {
+      "comment": "`: Type`, `: pkg::Type` after a feature, parameter or operation",
+      "match": "(?<!:)(:)(?!:)\\s*((?:[\\p{L}_$][\\w$]*\\s*::\\s*)*)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "punctuation.separator.colon.oclinecore"
+        },
+        "2": {
+          "name": "entity.name.namespace.oclinecore",
+          "patterns": [
+            {
+              "match": "::",
+              "name": "punctuation.separator.namespace.oclinecore"
+            }
+          ]
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "source.ocl#types"
+            },
+            {
+              "match": ".+",
+              "name": "entity.name.type.oclinecore"
+            }
+          ]
+        }
+      }
+    },
+    "multiplicity": {
+      "match": "(\\[)\\s*((?:\\d+|[*+?])(?:\\s*\\.\\.\\s*(?:\\d+|\\*))?(?:\\s*\\|\\s*[?1])?)\\s*(\\])",
+      "name": "meta.multiplicity.oclinecore",
+      "captures": {
+        "1": {
+          "name": "punctuation.section.brackets.begin.oclinecore"
+        },
+        "2": {
+          "patterns": [
+            {
+              "match": "\\d+",
+              "name": "constant.numeric.integer.oclinecore"
+            },
+            {
+              "match": "\\.\\.",
+              "name": "keyword.operator.range.oclinecore"
+            },
+            {
+              "match": "[*+?|]",
+              "name": "keyword.operator.multiplicity.oclinecore"
+            }
+          ]
+        },
+        "3": {
+          "name": "punctuation.section.brackets.end.oclinecore"
+        }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "::",
+          "name": "punctuation.separator.namespace.oclinecore"
+        },
+        {
+          "match": "#",
+          "name": "keyword.operator.opposite.oclinecore"
+        },
+        {
+          "match": "!",
+          "name": "keyword.operator.negation.oclinecore"
+        },
+        {
+          "match": "=",
+          "name": "keyword.operator.assignment.oclinecore"
+        },
+        {
+          "match": "-",
+          "name": "keyword.operator.arithmetic.oclinecore"
+        },
+        {
+          "match": "\\*",
+          "name": "keyword.operator.oclinecore"
+        }
+      ]
+    }
+  }
+}

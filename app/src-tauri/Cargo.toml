@@ -1,0 +1,23 @@
+[package]
+name = "oxy-app"
+description = "Oxychloride desktop editor"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "oxy_app_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "oxy-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+oxychloride = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<net:Network xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:net="http://example.org/net">
+  <nodes id="L1" name="lib"/>
+</net:Network>

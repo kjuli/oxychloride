@@ -1,0 +1,13 @@
+[package]
+name = "oxychloride"
+description = "OCL for Ecore models: workspace API, JSON protocol and JSON-RPC server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-ecore.workspace = true
+oxy-ocl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true

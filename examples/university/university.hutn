@@ -1,0 +1,68 @@
+// A model of university.oclinecore in HUTN (OMG Human-Usable Textual Notation).
+//   oxy run university.oclinecore university.hutn
+//
+// It violates three invariants (Brian and Carla lack prerequisites, Carla takes too many
+// credits) and, because of the bug in Course::hasSeat(), its postcondition for the two
+// full courses.
+
+@Spec {
+  metamodel "university" {
+    nsUri: "http://www.example.org/university/1.0"
+  }
+}
+
+university {
+  University "tum" {
+    name: "Technical University"
+    courses:
+      Course "prog1" { code: "IN0001" title: "Programming 1" kind: LECTURE credits: 8 capacity: 3 },
+      Course "prog2" {
+        code: "IN0002"
+        title: "Programming 2"
+        kind: LECTURE
+        credits: 8
+        capacity: 2
+        prerequisites: Course "prog1"
+      },
+      Course "algo" {
+        code: "IN0007"
+        title: "Algorithms"
+        kind: LECTURE
+        credits: 6
+        capacity: 40
+        prerequisites: Course "prog1"
+      },
+      Course "thesis" {
+        code: "IN9999"
+        title: "Thesis"
+        kind: PROJECT
+        credits: 30
+        capacity: 5
+        prerequisites: Course "algo", Course "prog2"
+      }
+    students:
+      Student "ada" {
+        name: "Ada"
+        semester: 3
+        enrolments:
+          Enrolment { course: Course "prog1" grade: 1 },
+          Enrolment { course: Course "prog2" },
+          Enrolment { course: Course "algo" }
+      },
+      Student "brian" {
+        name: "Brian"
+        semester: 1
+        enrolments:
+          Enrolment { course: Course "prog1" },
+          Enrolment { course: Course "prog2" }
+      },
+      Student "carla" {
+        name: "Carla"
+        semester: 5
+        enrolments:
+          Enrolment { course: Course "prog1" grade: 2 },
+          Enrolment { course: Course "algo" grade: 1 },
+          Enrolment { course: Course "thesis" }
+      }
+  }
+}

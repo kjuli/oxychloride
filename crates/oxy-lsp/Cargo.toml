@@ -1,0 +1,12 @@
+[package]
+name = "oxy-lsp"
+description = "Language server (LSP) for OCL, OCLinEcore, HUTN and XMI documents, on the Oxychloride engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxychloride.workspace = true
+serde_json.workspace = true
+lsp-server = "0.7"
+crossbeam-channel = "0.5"

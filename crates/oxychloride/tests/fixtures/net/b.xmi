@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<net:Network xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:net="http://example.org/net">
+  <nodes id="B1" name="b1">
+    <next href="a.xmi#A1"/>
+  </nodes>
+</net:Network>

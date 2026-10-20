@@ -1,0 +1,48 @@
+// The library model of library.xmi in HUTN (OMG Human-Usable Textual Notation).
+// Validate it with:
+//   oxy run examples/library/library.ocl -m examples/library/library.hutn -e examples/library/library.ecore
+//
+// Objects are `Class "identifier" { feature: value, ... }`; identifiers are used to refer to
+// objects (`authors: Author "herbert"`). Nested objects are the values of containment features.
+
+@Spec {
+  metamodel "library" {
+    nsUri: "http://www.example.org/library/1.0"
+  }
+}
+
+library {
+  Library "city" {
+    name: "City Library"
+    books:
+      Book "dune" {
+        name: "Dune"
+        isbn: "978-0441013593"
+        copies: 2
+        genre: FICTION
+        authors: Author "herbert"
+      },
+      Book "history" {
+        name: "A Brief History of Time"
+        isbn: "978-0553380163"
+        copies: 1
+        genre: SCIENCE
+      },
+      Book "guns" {
+        name: "The Guns of August"
+        copies: 0
+        genre: HISTORY
+      }
+    members:
+      Member "alice" { name: "Alice" age: 34 },
+      Member "bob" { name: "Bob" age: 16 },
+      Member "carol" { name: "Carol" age: 51 },
+      Member "frank" { name: "Frank" age: 80 }
+    loans:
+      Loan { book: Book "dune" member: Member "alice" date: "2026-09-01" },
+      Loan { book: Book "history" member: Member "alice" date: "2026-09-03" },
+      Loan { book: Book "history" member: Member "bob" date: "2026-09-07" }
+    authors:
+      Author "herbert" { name: "Frank Herbert" age: 65 }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "run-oxychloride-driver",
+  "private": true,
+  "type": "module",
+  "description": "Drives the Oxychloride desktop UI in headless Chromium against the real engine (oxy serve).",
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "oxy-ocl"
+description = "OCL parser, type checker and evaluator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-ecore.workspace = true
+indexmap.workspace = true
+regex = "1.13.1"
