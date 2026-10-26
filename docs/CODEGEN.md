@@ -141,12 +141,14 @@ The translation follows the engine's evaluator (`crates/oxy-ocl/src/eval.rs`), a
 
 ## How it works
 
-```
- .ecore / OCLinEcore ─► Metamodel ──┐
- Complete OCL ────────► Environment ┼─► build ─► CodeModel ─► Target::generate ─► files
-   (type checked: an Analysis per   │   (oxy-codegen/src/build.rs,     python.rs, rust.rs,
-    source records each expression's│    lower.rs)                      + runtime/<language>/
-    type and what its names mean)   ┘
+```mermaid
+flowchart LR
+    ecore[".ecore / OCLinEcore"] --> mm["Metamodel"]
+    ocl["Complete OCL"] --> env["Environment<br/>type checked: an Analysis per source records<br/>each expression's type and what its names mean"]
+    mm & env --> build["build<br/>(oxy-codegen/src/build.rs, lower.rs)"]
+    build --> model["CodeModel"]
+    model --> generate["Target::generate<br/>(python.rs, rust.rs,<br/>+ runtime/#lt;language#gt;/)"]
+    generate --> files["files"]
 ```
 
 1. **Analysis** (`oxy-ocl`): the type checker records, per expression id, its static type and how it resolved each name, property and call (`oxy_ocl::resolution`): a variable, a property of `self` or of an implicit iterator (and which), a feature, a `def:`, an operation of the metamodel, a library operation, an implicit collect. Generators read this instead of re-implementing OCL's resolution rules.

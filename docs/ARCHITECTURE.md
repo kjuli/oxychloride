@@ -1,37 +1,33 @@
 # Architecture
 
-```
-                 ┌──────────┐ ┌───────────┐ ┌─────────────┐ ┌───────────────┐
-  front ends     │ oxy (CLI)│ │ oxy serve │ │ C ABI (ffi) │ │ oxy lsp       │◄─ LSP: VS Code extension
-                 │          │ │           │ │             │ │ (oxy-lsp)     │   (text editors, views,
-                 └─────┬────┘ └─────┬─────┘ └──────┬──────┘ └───────┬───────┘   metamodel and rule diagrams)
-                       │            └──── JSON-RPC (rpc::Server) ───┘
-                 ┌─────▼──────────────────────────────────────────────────────────┐
-  oxychloride    │ Workspace: metamodels + models + documents (OCL, OCLinEcore,   │
-                 │ HUTN, XMI, Henshin, QVT); protocol types; diagnostics,         │
-                 │ validation, evaluation, hover/completion, export/convert, XML  │
-                 │ Schemas, transformation sessions and state spaces, Henshin     │
-                 │ text ⇄ model, QVT runs, metamodel and rule diagrams, code gen. │
-                 └─────┬──────────────────┬──────────────────┬────────┬───────────┘
-                       │       ┌──────────▼───────────┐ ┌────▼──────┐ │
-  oxy-codegen,         │       │ build → CodeModel →  │ │ oxy-qvt   │ │
-  oxy-qvt              │       │ targets (Python,     │ │ QVTo, QVTr│ │
-                       │       │ Rust) + runtimes     │ │ syntax →  │ │
-                       │       │                      │ │ compile → │ │
-                       │       │                      │ │ run       │ │
-                       │       └──────────┬───────────┘ └────┬──────┘ │
-                 ┌─────▼──────────────────▼──────────────────▼──┐ ┌───▼────────────────────┐
-  oxy-ocl        │ syntax (lexer, parser, AST; OCLinEcore; QVT  │ │ oxy-henshin            │
-                 │ dialect) → oclinecore → env → check (types)  │ │ syntax ⇄ xmi (.henshin │
-                 │ → eval (values, contracts, Imperative OCL)   │ │ models), print → module│
-                 │ → validate; hosts for languages on OCL       │ │ → engine → explore     │
-                 │                                              │ │                        │
-                 └─────┬────────────────────────────────────────┘ └───────────┬────────────┘
-                 ┌─────▼──────────────────────────────────────────────────────▼────────────┐
-  oxy-ecore      │ Metamodel (arena of packages/classifiers/features/operations), Model    │
-                 │ (dynamic objects), .ecore/XMI loaders and writers, HUTN, XSD writer,    │
-                 │ mini XML DOM                                                            │
-                 └─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    vscode(["VS Code extension<br/>text editors, views, metamodel and rule diagrams"])
+
+    subgraph front ["front ends"]
+        cli["oxy (CLI)"]
+        serve["oxy serve"]
+        ffi["C ABI (oxy-ffi)"]
+        lsp["oxy lsp (oxy-lsp)"]
+    end
+
+    core["<b>oxychloride</b><br/>Workspace: metamodels + models + documents (OCL, OCLinEcore, HUTN, XMI, Henshin, QVT);<br/>protocol types; diagnostics, validation, evaluation, hover/completion, export/convert,<br/>XML Schemas, transformation sessions and state spaces, Henshin text ⇄ model,<br/>QVT runs, metamodel and rule diagrams, code generation"]
+
+    codegen["<b>oxy-codegen</b><br/>build → CodeModel → targets<br/>(Python, Rust) + runtimes"]
+    qvt["<b>oxy-qvt</b><br/>QVTo, QVTr:<br/>syntax → compile → run"]
+
+    ocl["<b>oxy-ocl</b><br/>syntax (lexer, parser, AST; OCLinEcore; QVT dialect)<br/>→ oclinecore → env → check (types)<br/>→ eval (values, contracts, Imperative OCL) → validate;<br/>hosts for languages on OCL"]
+    henshin["<b>oxy-henshin</b><br/>syntax ⇄ xmi (.henshin models),<br/>print → module → engine → explore"]
+
+    ecore["<b>oxy-ecore</b><br/>Metamodel (arena of packages/classifiers/features/operations), Model (dynamic objects),<br/>.ecore/XMI loaders and writers, HUTN, XSD writer, mini XML DOM"]
+
+    vscode -- LSP --> lsp
+    cli --> core
+    serve & ffi & lsp -- "JSON-RPC (rpc::Server)" --> core
+    core --> codegen & qvt & ocl & henshin
+    codegen & qvt --> ocl
+    ocl --> ecore
+    henshin --> ecore
 ```
 
 ## oxy-ecore
