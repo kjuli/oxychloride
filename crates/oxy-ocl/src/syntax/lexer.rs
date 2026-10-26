@@ -50,7 +50,24 @@ pub enum TokenKind {
     Hash,
     /// `!` (negated qualifiers in OCLinEcore, e.g. `!ordered`).
     Bang,
+    /// `:=` (assignments of Imperative OCL; QVT dialect only).
+    ColonEq,
+    /// `+=` (QVT dialect only).
+    PlusEq,
+    /// `++` (the rest of a QVT Relations collection template; QVT dialect only).
+    PlusPlus,
     Eof,
+}
+
+/// The variant of the language to tokenize.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Dialect {
+    /// OCL as in Complete OCL documents, OCLinEcore and Ecore annotations.
+    #[default]
+    Ocl,
+    /// OCL as QVT (Operational Mappings and Relations) writes it: also `//` comments,
+    /// double-quoted strings, `:=`, `+=`, `!=` and `++`.
+    Qvt,
 }
 
 /// Words that are reserved inside expressions.
@@ -162,6 +179,9 @@ impl fmt::Display for TokenKind {
             TokenKind::Question => "'?'",
             TokenKind::Hash => "'#'",
             TokenKind::Bang => "'!'",
+            TokenKind::ColonEq => "':='",
+            TokenKind::PlusEq => "'+='",
+            TokenKind::PlusPlus => "'++'",
             TokenKind::Eof => "end of input",
         };
         f.write_str(s)
@@ -177,7 +197,12 @@ pub struct Token {
 /// Splits `src` into tokens. Lexical errors are reported and the offending characters skipped.
 /// The returned vector always ends with an [`TokenKind::Eof`] token.
 pub fn tokenize(src: &str) -> (Vec<Token>, Vec<Diagnostic>) {
-    let mut lexer = Lexer { src, bytes: src.as_bytes(), pos: 0, tokens: Vec::new(), diags: Vec::new() };
+    tokenize_dialect(src, Dialect::Ocl)
+}
+
+/// Splits `src` into tokens of the given dialect (see [`tokenize`]).
+pub fn tokenize_dialect(src: &str, dialect: Dialect) -> (Vec<Token>, Vec<Diagnostic>) {
+    let mut lexer = Lexer { src, bytes: src.as_bytes(), dialect, pos: 0, tokens: Vec::new(), diags: Vec::new() };
     lexer.run();
     (lexer.tokens, lexer.diags)
 }
@@ -185,6 +210,7 @@ pub fn tokenize(src: &str) -> (Vec<Token>, Vec<Diagnostic>) {
 struct Lexer<'a> {
     src: &'a str,
     bytes: &'a [u8],
+    dialect: Dialect,
     pos: usize,
     tokens: Vec<Token>,
     diags: Vec<Diagnostic>,
@@ -222,9 +248,23 @@ impl Lexer<'_> {
                 self.word();
                 continue;
             }
-            if c == b'\'' {
+            if c == b'\'' || (c == b'"' && self.dialect == Dialect::Qvt) {
                 self.string();
                 continue;
+            }
+            if self.dialect == Dialect::Qvt {
+                let kind = match (c, self.peek(1)) {
+                    (b':', b'=') => Some(TokenKind::ColonEq),
+                    (b'+', b'=') => Some(TokenKind::PlusEq),
+                    (b'+', b'+') => Some(TokenKind::PlusPlus),
+                    (b'!', b'=') => Some(TokenKind::Ne),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    self.pos += 2;
+                    self.push(kind, start);
+                    continue;
+                }
             }
             let (kind, len) = match (c, self.peek(1), self.peek(2)) {
                 (b'?', b'-', b'>') => (TokenKind::SafeArrow, 3),
@@ -277,7 +317,9 @@ impl Lexer<'_> {
             let c = self.peek(0);
             if c.is_ascii_whitespace() {
                 self.pos += 1;
-            } else if c == b'-' && self.peek(1) == b'-' {
+            } else if (c == b'-' && self.peek(1) == b'-')
+                || (c == b'/' && self.peek(1) == b'/' && self.dialect == Dialect::Qvt)
+            {
                 while self.pos < self.bytes.len() && self.peek(0) != b'\n' {
                     self.pos += 1;
                 }
@@ -368,7 +410,7 @@ impl Lexer<'_> {
         loop {
             let save = self.pos;
             self.skip_trivia();
-            if self.peek(0) == b'\'' {
+            if self.peek(0) == b'\'' || (self.peek(0) == b'"' && self.dialect == Dialect::Qvt) {
                 value.push_str(&self.string_body(self.pos));
             } else {
                 self.pos = save;
@@ -378,8 +420,9 @@ impl Lexer<'_> {
         self.push(TokenKind::Str(value), start);
     }
 
-    /// Reads a `'...'` literal starting at the opening quote (at `self.pos`).
+    /// Reads a `'...'` (or `"..."`) literal starting at the opening quote (at `self.pos`).
     fn string_body(&mut self, start: usize) -> String {
+        let quote = self.peek(0) as char;
         self.pos += 1; // opening quote
         let mut out = String::new();
         loop {
@@ -389,7 +432,7 @@ impl Lexer<'_> {
             };
             self.pos += ch.len_utf8();
             match ch {
-                '\'' => return out,
+                c if c == quote => return out,
                 '\\' => {
                     let esc_start = self.pos - 1;
                     let Some(e) = self.src[self.pos..].chars().next() else { continue };

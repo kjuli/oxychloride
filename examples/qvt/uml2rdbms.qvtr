@@ -1,0 +1,78 @@
+/*
+ * Class diagrams to relational schemas, in QVT Relations: uml2rdbms.qvto in the other
+ * language of QVT. Run in the direction of `target`, it creates what the relations demand of
+ * the schema; run in check mode, it reports the classes a schema lacks tables for.
+ *
+ *   oxy qvt uml2rdbms.qvtr -e uml.oclinecore -e rdbms.oclinecore --in source=company.hutn
+ */
+import uml : 'http://www.example.org/qvt/uml';
+import rdbms : 'http://www.example.org/qvt/rdbms';
+
+transformation uml2rdbms(source : uml, target : rdbms) {
+	-- Objects with the same values of these properties are the same object: enforcing a
+	-- relation finds them instead of creating others.
+	key rdbms::Table { schema, name };
+	key rdbms::Column { owner, name };
+	key rdbms::Key { owner };
+	key rdbms::ForeignKey { owner, name };
+
+	top relation PackageToSchema {
+		pn : String;
+		checkonly domain source p : uml::Package { name = pn };
+		enforce domain target s : rdbms::Schema { name = pn };
+	}
+
+	top relation ClassToTable {
+		cn : String;
+		checkonly domain source c : uml::Class {
+			namespace = p : uml::Package {},
+			persistent = true,
+			name = cn
+		};
+		enforce domain target t : rdbms::Table {
+			schema = s : rdbms::Schema {},
+			name = cn,
+			columns = cl : rdbms::Column { name = cn + '_tid', type = 'NUMBER' },
+			keys = k : rdbms::Key { name = cn + '_pk', columns = cl }
+		};
+		when { PackageToSchema(p, s); }
+		where { AttributeToColumn(c, t); }
+	}
+
+	relation AttributeToColumn {
+		an, pn, sqltype : String;
+		checkonly domain source c : uml::Class {
+			attributes = a : uml::Attribute {
+				name = an,
+				type = p : uml::PrimitiveType { name = pn }
+			}
+		};
+		enforce domain target t : rdbms::Table {
+			columns = cl : rdbms::Column { name = an, type = sqltype }
+		};
+		where { sqltype = SqlType(pn); }
+	}
+
+	-- An attribute typed by a persistent class: a foreign key to the class's table.
+	top relation AttributeToForeignKey {
+		an : String;
+		checkonly domain source a : uml::Attribute {
+			owner = c : uml::Class {},
+			type = r : uml::Class {},
+			name = an
+		};
+		enforce domain target fk : rdbms::ForeignKey {
+			owner = t : rdbms::Table {},
+			name = an + '_fk',
+			columns = cl : rdbms::Column { owner = t, name = an + '_tid', type = 'NUMBER' },
+			refersTo = k : rdbms::Key { owner = rt : rdbms::Table {} }
+		};
+		when { ClassToTable(c, t); ClassToTable(r, rt); }
+	}
+
+	query SqlType(primitiveType : String) : String {
+		if primitiveType = 'Integer' then 'NUMBER'
+		else if primitiveType = 'Boolean' then 'BOOLEAN'
+		else 'VARCHAR' endif endif
+	}
+}

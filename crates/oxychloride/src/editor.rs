@@ -1,4 +1,4 @@
-//! Editor support: hovers and completion for Complete OCL, OCLinEcore, HUTN and Henshin
+//! Editor support: hovers and completion for Complete OCL, OCLinEcore, HUTN, Henshin and QVT
 //! documents.
 
 use oxy_ecore::{ClassifierId, ElementRef, Metamodel};
@@ -11,6 +11,7 @@ use crate::workspace::{Compiled, Workspace, range};
 mod henshin;
 mod hutn;
 mod oclinecore;
+mod qvt;
 
 /// Keywords of OCL expressions.
 const OCL_KEYWORDS: &[&str] = &[
@@ -156,6 +157,7 @@ impl Workspace {
         match language {
             Language::Hutn => return self.hover_hutn(document, text, offset),
             Language::Henshin | Language::HenshinModel => return self.hover_henshin(document, text, language, offset),
+            Language::Qvto | Language::Qvtr => return self.hover_qvt(document, text, offset),
             // XMI is XML: the XML tooling (with the generated schemas) covers it.
             Language::Xmi => return None,
             Language::Ocl | Language::OclInEcore => {}
@@ -225,6 +227,7 @@ impl Workspace {
                 return Some(finish_completion(text, start, offset, items));
             }
             Language::Henshin => self.complete_henshin(text, word_start),
+            Language::Qvto | Language::Qvtr => self.complete_qvt(document, text, word_start, language),
             // `.henshin` files are XML: they are edited as rule diagrams.
             Language::Xmi | Language::HenshinModel => return None,
         };

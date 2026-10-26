@@ -1,0 +1,218 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "QVT Relations",
+  "scopeName": "source.qvtr",
+  "fileTypes": [
+    "qvtr"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#import"
+    },
+    {
+      "include": "#transformation"
+    },
+    {
+      "include": "#relation"
+    },
+    {
+      "include": "#overrides"
+    },
+    {
+      "include": "#domain"
+    },
+    {
+      "include": "#query"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#assignment"
+    },
+    {
+      "include": "#wildcard"
+    },
+    {
+      "include": "#typed-name"
+    },
+    {
+      "include": "source.ocl#expression"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "include": "source.ocl#comments"
+        },
+        {
+          "name": "comment.line.double-slash.qvt",
+          "match": "(//).*$",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.qvt"
+            }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "include": "source.ocl#strings"
+        },
+        {
+          "name": "string.quoted.double.qvt",
+          "begin": "\"",
+          "end": "\"|$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.qvt"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.qvt"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\(?:[ntrbf'\\\"\\\\]|u[0-9A-Fa-f]{4})",
+              "name": "constant.character.escape.qvt"
+            }
+          ]
+        }
+      ]
+    },
+    "assignment": {
+      "match": ":=|\\+=|!=|\\+\\+",
+      "name": "keyword.operator.assignment.qvt"
+    },
+    "typed-name": {
+      "comment": "name : Type (variables, parameters, templates): the type is a (qualified) type name.",
+      "match": "\\b((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))\\s*(:)(?![:=])\\s*((?:[\\p{L}_$][\\w$]*::)*[\\p{L}_$][\\w$]*)",
+      "captures": {
+        "1": {
+          "name": "variable.parameter.qvt"
+        },
+        "2": {
+          "name": "punctuation.separator.colon.qvt"
+        },
+        "3": {
+          "name": "entity.name.type.qvt"
+        }
+      }
+    },
+    "import": {
+      "match": "\\b(import)\\b(?:\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))\\s*(:)(?!:))?",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.qvtr"
+        },
+        "2": {
+          "name": "entity.name.namespace.qvtr"
+        },
+        "3": {
+          "name": "punctuation.separator.colon.qvtr"
+        }
+      }
+    },
+    "transformation": {
+      "match": "\\b(transformation|package)\\s+((?:(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)::)*(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.transformation.qvtr"
+        },
+        "2": {
+          "name": "entity.name.class.qvtr"
+        }
+      }
+    },
+    "relation": {
+      "match": "\\b(?:(top)\\s+)?(?:(abstract)\\s+)?(relation)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.top.qvtr"
+        },
+        "2": {
+          "name": "storage.modifier.abstract.qvtr"
+        },
+        "3": {
+          "name": "keyword.other.relation.qvtr"
+        },
+        "4": {
+          "name": "entity.name.function.relation.qvtr"
+        }
+      }
+    },
+    "overrides": {
+      "match": "\\b(overrides)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.overrides.qvtr"
+        },
+        "2": {
+          "name": "entity.name.function.relation.qvtr"
+        }
+      }
+    },
+    "domain": {
+      "match": "\\b(?:(checkonly|enforce|replace|primitive)\\s+)?(domain)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?!\\s*:)",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.domain.qvtr"
+        },
+        "2": {
+          "name": "keyword.other.domain.qvtr"
+        },
+        "3": {
+          "name": "variable.parameter.model.qvtr"
+        }
+      }
+    },
+    "query": {
+      "match": "\\b(?:(transient)\\s+)?(query)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.qvtr"
+        },
+        "2": {
+          "name": "keyword.other.query.qvtr"
+        },
+        "3": {
+          "name": "entity.name.function.query.qvtr"
+        }
+      }
+    },
+    "wildcard": {
+      "match": "(?<![\\w$])_(?![\\w$'])",
+      "name": "variable.language.wildcard.qvtr"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(?:top|abstract|checkonly|enforce|replace|primitive|transient)\\b",
+          "name": "storage.modifier.qvtr"
+        },
+        {
+          "match": "\\b(?:import|transformation|package|key|relation|overrides|domain|query|when|where|opposite|default_values|implementedby|extends|target|input|output|via|dependsOn|iterates)\\b",
+          "name": "keyword.other.qvtr"
+        },
+        {
+          "match": "\\b(?:self|this)\\b",
+          "name": "variable.language.qvtr"
+        },
+        {
+          "include": "source.ocl#keywords"
+        }
+      ]
+    }
+  }
+}

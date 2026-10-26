@@ -9,7 +9,9 @@ use serde_json::{Value as Json, json};
 
 use std::collections::HashMap;
 
-use crate::protocol::{CodeRequest, Language, MetamodelEdit, ObjectRef, Position, RegistryEntry, TransformationEdit};
+use crate::protocol::{
+    CodeRequest, Language, MetamodelEdit, ObjectRef, Position, QvtRunRequest, RegistryEntry, TransformationEdit,
+};
 use crate::transform::ExploreRequest;
 use crate::workspace::{Error, ValidateOptions, Workspace};
 
@@ -58,6 +60,8 @@ pub const METHODS: &[&str] = &[
     "transformationDiagram",
     "editTransformation",
     "syncTransformation",
+    "qvtTransformations",
+    "runQvt",
 ];
 
 pub mod codes {
@@ -162,6 +166,13 @@ impl Default for ValidateParams {
 struct EvaluateParams {
     expression: String,
     context: Option<ObjectRef>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct QvtTransformationsParams {
+    /// A model resource: which parameters of each transformation it can be bound to.
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -558,6 +569,14 @@ impl Server {
                 let p: SyncTransformationParams = params(p)?;
                 update_text(ws, &p.name, p.text.as_deref())?;
                 to_json(json!({ "edits": ws.sync_transformation(&p.name, &p.target, &p.target_text)? }))
+            }
+            "qvtTransformations" => {
+                let p: QvtTransformationsParams = params(p)?;
+                to_json(json!({ "transformations": ws.qvt_transformations(p.model.as_deref())? }))
+            }
+            "runQvt" => {
+                let p: QvtRunRequest = params(p)?;
+                to_json(ws.run_qvt(&p)?)
             }
             other => Err(RpcError::new(codes::METHOD_NOT_FOUND, format!("unknown method '{other}'"))),
         }

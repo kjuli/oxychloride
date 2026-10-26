@@ -9,7 +9,7 @@ Version 1. One protocol, several transports:
 | Rust | `oxychloride::rpc::Server::call(method, params)` (or use `oxychloride::Workspace` directly) |
 | Language server | `oxy lsp` — LSP on stdio; the request `oxychloride/rpc` `{method, params}` calls any method below (see [The language server](#the-language-server-oxy-lsp)) |
 
-Each server/session holds one **workspace**: loaded metamodels (`.ecore`), instance models (XMI) and open documents — Complete OCL, OCLinEcore metamodels, HUTN and XMI models, and Henshin transformations — plus the transformation sessions started on its models. Requests follow [JSON-RPC 2.0](https://www.jsonrpc.org/specification); requests without `id` are notifications and get no response; batches are supported.
+Each server/session holds one **workspace**: loaded metamodels (`.ecore`), instance models (XMI) and open documents — Complete OCL, OCLinEcore metamodels, HUTN and XMI models, Henshin and QVT transformations — plus the transformation sessions started on its models. Requests follow [JSON-RPC 2.0](https://www.jsonrpc.org/specification); requests without `id` are notifications and get no response; batches are supported.
 
 Conventions: field names are camelCase. Positions are **0-based** `{line, column}`; columns count Unicode scalar values. A `Range` is `{start, end}`.
 
@@ -58,13 +58,13 @@ type RegistryInfo = {
 type RegisteredResource = { uri: string; aliases?: string[]; packages: { name: string; nsUri: string }[] };
 ```
 
-Diagnostics about metamodels that cannot be found name the URI (`cannot find imported metamodel '…'`, `unknown package nsURI '…'`, `no metamodel with nsURI '…'`, `cannot resolve reference '…#…'`), so clients can offer to register a file for it.
+Diagnostics about metamodels that cannot be found name the URI (`cannot find imported metamodel '…'`, `unknown package nsURI '…'`, `no metamodel with nsURI '…'`, `cannot resolve reference '…#…'`, and for QVT model types and imports `cannot find the metamodel '…'`), so clients can offer to register a file for it.
 
 ### `reset` → `null` · `clearModels` → `null` · `reload` → `{problems: [Diagnostic]}`
 `reset` empties the workspace; `clearModels` removes instance models only; `reload` re-reads all metamodels and models from their sources and re-resolves document imports.
 
 ### `openDocument` `{name, text, language?}` → `{diagnostics: [Diagnostic], language}`
-Adds or replaces a document. `language` is `"ocl"` (Complete OCL), `"oclinecore"` (a metamodel), `"hutn"` or `"xmi"` (a model), `"henshin"` (graph transformation rules in Henshin's textual syntax) or `"henshinModel"` (the same as a `.henshin` model of Henshin's editors, see [Transformations](#transformations-henshin)); by default it follows the extension of `name` (`.oclinecore`, `.hutn`, `.xmi`, `.henshin_text`, `.henshin`, else Complete OCL). Use the file path as `name`: relative `import` statements are resolved against it and the imported `.ecore` files are loaded (an import of an `.oclinecore` file must name an open document).
+Adds or replaces a document. `language` is `"ocl"` (Complete OCL), `"oclinecore"` (a metamodel), `"hutn"` or `"xmi"` (a model), `"henshin"` (graph transformation rules in Henshin's textual syntax), `"henshinModel"` (the same as a `.henshin` model of Henshin's editors, see [Transformations](#transformations-henshin)), `"qvto"` or `"qvtr"` (a QVT transformation, see [QVT](#qvt-transformations)); by default it follows the extension of `name` (`.oclinecore`, `.hutn`, `.xmi`, `.henshin_text`, `.henshin`, `.qvto`, `.qvtr`, else Complete OCL). Use the file path as `name`: relative `import` statements are resolved against it and the imported `.ecore` files are loaded (an import of an `.oclinecore` file must name an open document).
 
 An OCLinEcore document's packages become part of the workspace's metamodels (they show in `packages`); a HUTN document's objects become a model resource named `name` (they show in `models`, can be `context` objects and are validated). Both are rebuilt on every change, together with whatever depends on them. The diagnostics of a HUTN document include, once it has no errors, the invariants and pre-/postconditions its objects violate (errors) or that cannot be evaluated (warnings), located on the objects.
 
@@ -271,6 +271,37 @@ Replaces the steps after the step the state space was explored from by the short
 ### `syncTransformation` `{name, text?, target, targetText}` → `{edits: [{range, text}]}`
 The edits that make `target` — the Henshin document of the other syntax, whose current text is `targetText` (it need not be open) — mean what the document `name` means: towards a `.henshin` model it is written again from the text, keeping its ids and what the text cannot express (descriptions, annotations, …; renamed rules, units and nodes keep their ids), and compared line by line; towards a text, the rules and units that still mean the same keep their text (layout and comments), the others are written anew. No edits: the two are equivalent. Fails (`-32602`) while `name` has errors. Clients use it to keep a pair `x.henshin_text`/`x.henshin` in sync.
 
+## QVT transformations
+
+QVT Operational Mappings (`.qvto`) and QVT Relations (`.qvtr`) documents, see [QVT.md](QVT.md). Their diagnostics, hovers and completion are those of the other documents; their model types and imports name metamodels by nsURI, by a URI of the package registry, or by a file relative to the document (loaded when it is opened). They change neither metamodels nor models.
+
+### `qvtTransformations` `{model?}` → `{transformations: [QvtTransformationInfo]}`
+The QVT transformations of the open documents. With `model` (a model resource, as `models` names it), `applicable` lists the parameters it can be bound to: those whose metamodel has the packages of all its objects.
+```ts
+type QvtTransformationInfo = {
+  document: string; language: "qvto" | "qvtr"; name: string;
+  parameters: { name; direction?: "in" | "out" | "inout"; modelType; metamodels: string[] /* nsURIs */ }[];
+  targets: string[];      // QVTo: the out and inout parameters; QVTr: the parameters relations enforce (its directions)
+  errors: number;         // a transformation with errors does not run
+  applicable?: string[];
+};
+```
+
+### `runQvt` `{document, models?, outputs?, target?, check?, format?, configuration?}` → `QvtRunResult`
+Runs a transformation on copies of the workspace's models (the workspace is not changed, no files are written). `models: [{parameter, model}]` binds the input parameters (QVTo: `in` and `inout`; QVTr: all but the target, and the target too to update or check an existing model) to model resources; the output parameters (QVTo: `out`; QVTr: the target) get new, empty models whose paths `outputs: [{parameter, path}]` give (default: `<parameter>.xmi` next to the document) — references to the input models and `xsi:schemaLocation`s are relative to them. `target` is the parameter a QVTr transformation runs in the direction of (needed when relations enforce several); `check: true` only checks the target model. `format` (`"xmi"` or `"hutn"`; default: by the output path's extension) is the format of the outputs' text; `configuration` gives values of QVTo configuration properties in OCL syntax (`{"prefix": "'T_'"}`). Fails (`-32602`) when the transformation has errors or a model is missing.
+```ts
+type QvtRunResult = {
+  outputs: { parameter; path; format: "xmi" | "hutn"; text; objects: number }[];  // the out and inout models (not in check mode)
+  log: string[];                 // log(...) and failed assertions
+  problems: Diagnostic[];        // met while running, located in the transformation
+  violations: string[];          // QVTr check mode: "relation R does not hold for x = …"
+  invariants: string[];          // invariants the outputs violate
+  applications: number;          // mappings (QVTo) or relations (QVTr) applied
+  created: number;               // objects created
+  aborted?: string;              // a fatal assertion that ended the transformation
+};
+```
+
 ## Rule diagrams
 
 A Henshin document of either syntax as diagrams in Henshin's notation, and diagram edits as text edits; as for metamodel diagrams, the text is the only source of truth. Ids are made of names: a rule `r`, a multi-rule `r/m` (nested `r/m/n`), a condition graph of a matching formula `r#g`; a node `<scope>::n`, an edge `<scope>::s->t:ref`, an attribute `<scope>::n.a` (the scope it is written in, e.g. a multi-rule's `reuse`); a unit `u` and the elements of its body `u@1`, `u@2.1.1` (element 2's first list's first element); a repeated id gets `#2`, ….
@@ -311,7 +342,7 @@ The text edits that make a diagram edit (the document is not changed). `edit` is
 
 `oxy lsp` speaks the Language Server Protocol on stdio (`--stdio` is accepted and ignored). It keeps one workspace:
 
-- Documents open in the editor (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text` with language id `henshin`; `.xmi` and `.henshin` with language id `xml`) are workspace documents named by their path; unsaved documents are named by their URI, their language comes from the language id. The `.oclinecore`, `.ocl`, `.henshin_text` and `.henshin` files of the workspace folders are loaded too, from disk while they are not open (and reloaded on `workspace/didChangeWatchedFiles`), so models find their metamodels and constraints. A changed `.ecore` file that is loaded (imported, named by a model, or registered) reloads all metamodels.
+- Documents open in the editor (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text` with language id `henshin`, `.qvto`, `.qvtr`; `.xmi` and `.henshin` with language id `xml`) are workspace documents named by their path; unsaved documents are named by their URI, their language comes from the language id. The `.oclinecore`, `.ocl`, `.henshin_text`, `.henshin`, `.qvto` and `.qvtr` files of the workspace folders are loaded too, from disk while they are not open (and reloaded on `workspace/didChangeWatchedFiles`), so models find their metamodels and constraints, and `qvtTransformations` the transformations of the workspace. A changed `.ecore` file that is loaded (imported, named by a model, or registered) reloads all metamodels.
 - `initializationOptions.registry` (`[RegistryEntry]`) sets the package registry (see `setRegistry`) before the workspace folders are loaded.
 - Once changes settle (200 ms), the diagnostics of all documents are published (`source: "ocl"`); they depend on each other, e.g. editing a metamodel re-checks its models.
 - `textDocument/hover` and `textDocument/completion` (LSP positions count UTF-16 code units; they are converted).

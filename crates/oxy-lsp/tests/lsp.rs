@@ -169,3 +169,36 @@ fn transforms_models_with_henshin_documents() {
     );
     assert_eq!(space["states"].as_array().unwrap().len(), 14);
 }
+
+#[test]
+fn offers_and_runs_qvt_transformations_of_the_workspace() {
+    let folder = format!("{EXAMPLES}/qvt");
+    let mut client = Client::start(&folder);
+    // Only the model is open: the metamodels and both transformations come from the folder.
+    let model = format!("{folder}/company.hutn");
+    let (uri, _) = client.open(&model, "hutn");
+    let diagnostics = client.diagnostics(&uri, |_| true);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    let list = client.rpc("qvtTransformations", json!({ "model": model }));
+    let transformations = list["transformations"].as_array().unwrap();
+    assert_eq!(transformations.len(), 2, "{list}");
+    assert!(transformations.iter().all(|t| t["applicable"] == json!(["source"]) && t["errors"] == 0), "{list}");
+
+    let qvto = format!("{folder}/uml2rdbms.qvto");
+    let result = client.rpc(
+        "runQvt",
+        json!({ "document": qvto, "models": [{ "parameter": "source", "model": model }], "format": "hutn" }),
+    );
+    assert_eq!(result["outputs"][0]["objects"], 13, "{result}");
+    assert!(result["outputs"][0]["text"].as_str().unwrap().contains("Schema {"), "{result}");
+
+    // Open, a transformation is checked like the other documents.
+    let (uri, text) = client.open(&qvto, "qvto");
+    let broken = text.replace("self.persistent", "self.persistant");
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": uri, "version": 2 }, "contentChanges": [{ "text": broken }] }),
+    );
+    let diagnostics = client.diagnostics(&uri, |d| !d.is_empty());
+    assert!(diagnostics[0]["message"].as_str().unwrap().contains("unknown property 'persistant'"), "{diagnostics:#?}");
+}

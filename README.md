@@ -5,10 +5,11 @@ An OCL (Object Constraint Language) engine for Ecore models, written in Rust: a 
 - **Library** — load `.ecore` metamodels and XMI models, parse and type check OCL, evaluate expressions, validate invariants and pre-/postconditions.
 - **Textual modelling** — write metamodels in **OCLinEcore** (Ecore classes with embedded OCL) and models in **HUTN** (the OMG Human-Usable Textual Notation, a generic syntax for instances of any metamodel); convert both to and from `.ecore`/XMI.
 - **Graph transformations** — in-place model transformations with **Henshin**, written in its textual syntax (`.henshin_text`) or as the `.henshin` models of Henshin's graphical editors — equivalent, converted into each other and kept in sync in pairs: rules with application conditions, attribute conditions and multi-rules, units, step-by-step application and state space exploration, with every state checked against the OCL constraints. See [docs/HENSHIN.md](docs/HENSHIN.md).
+- **Model transformations** — **QVT**, the OMG standard as Eclipse QVTo and QVTd implement it: **Operational Mappings** (`.qvto`: mappings with guards and init/population/end sections, helpers and queries, `resolve` over the trace, Imperative OCL) and **Relations** (`.qvtr`: relations between object patterns with `when` and `where` clauses and keys, run in the direction of a model — creating what the relations demand of it, or only checking it). Both are type checked as they are edited and run on the models of the workspace, producing new models as XMI or HUTN. See [docs/QVT.md](docs/QVT.md).
 - **Code generation** — native **Python** packages and **Rust** crates from a metamodel, like EMF's generated Java: classes with consistent containment and opposites, XMI loading and saving, and the OCL (invariants, operation bodies, pre- and postconditions, derived features, definitions) translated into native code that does not need the engine. See [docs/CODEGEN.md](docs/CODEGEN.md).
-- **CLI** (`oxy`) — check documents, run constraints against models, evaluate expressions, check the OCL embedded in metamodels, convert between XML and text formats, generate code.
+- **CLI** (`oxy`) — check documents, run constraints against models, evaluate expressions, check the OCL embedded in metamodels, convert between XML and text formats, run QVT transformations, generate code.
 - **Integration API** — a JSON-RPC protocol over stdio (`oxy serve`), the same protocol through a C ABI (`liboxychloride_ffi`), and a Rust API, so other modelling tools can validate their models with OCL.
-- **VS Code extension** — the same in VS Code, through a language server (`oxy lsp`): OCLinEcore metamodels, HUTN and XMI models checked live against all their OCL constraints, a graphical **metamodel diagram** for `.ecore` and `.oclinecore` files that edits the same document as the text editor beside it, an OCL console, a package registry that maps nsURIs and placeholder URIs to `.ecore` files, metamodel/model views that create instances, XML Schemas so the XML extension validates XMI files, code generation from the context menu, and Henshin transformations with highlighting, completion, a graphical **rule diagram** in Henshin's notation and colors (for texts and `.henshin` files, which are kept equivalent), and a view that applies rules step by step and draws state spaces.
+- **VS Code extension** — the same in VS Code, through a language server (`oxy lsp`): OCLinEcore metamodels, HUTN and XMI models checked live against all their OCL constraints, a graphical **metamodel diagram** for `.ecore` and `.oclinecore` files that edits the same document as the text editor beside it, an OCL console, a package registry that maps nsURIs and placeholder URIs to `.ecore` files, metamodel/model views that create instances, XML Schemas so the XML extension validates XMI files, code generation from the context menu, and Henshin transformations with highlighting, completion, a graphical **rule diagram** in Henshin's notation and colors (for texts and `.henshin` files, which are kept equivalent), and a view that applies rules step by step and draws state spaces; QVT transformations (`.qvto`, `.qvtr`) with highlighting, diagnostics, hovers and completion, run on a model from its context menu (the transformations that fit it are offered).
 
 ## Quick start
 
@@ -40,6 +41,12 @@ $B convert examples/university/university.hutn -e examples/university/university
 # And the other way: .ecore to OCLinEcore, XMI to HUTN.
 $B convert examples/library/library.ecore
 $B convert examples/library/library.xmi -e examples/library/library.ecore
+
+# Transform a model with QVT (Operational Mappings or Relations): class diagram → relational schema.
+$B qvt examples/qvt/uml2rdbms.qvto -e examples/qvt/uml.oclinecore -e examples/qvt/rdbms.oclinecore \
+  --in source=examples/qvt/company.hutn --out target=company.xmi
+$B qvt examples/qvt/uml2rdbms.qvtr -e examples/qvt/uml.oclinecore -e examples/qvt/rdbms.oclinecore \
+  --in source=examples/qvt/company.hutn --in target=company.xmi --check
 
 # Generate a Python package (or a Rust crate) with the OCL as native code.
 $B generate examples/library/library.ecore -d examples/library/library.ocl -t python -o generated
@@ -160,6 +167,35 @@ $B check examples/university/university.henshin -e examples/university/universit
 
 **Pre- and postconditions** are checked in two ways: whenever an operation with an OCL body is called during evaluation (in invariants, bodies, derivations or the console), its preconditions are checked before and its postconditions after the call (with `result` bound; `@pre` values are the current values, since OCL evaluation has no side effects); and validation calls every operation that has postconditions on every applicable object, with every combination of arguments from finite domains (Booleans, enumeration literals, model objects), skipping calls whose preconditions do not hold. Operations with other parameter types are only checked where they are called; the validation report says so.
 
+## Model transformations (QVT)
+
+**QVT Operational Mappings** (`.qvto`) and **QVT Relations** (`.qvtr`) transform models into other models, as in Eclipse QVTo and Eclipse QVTd (whose grammars the parsers follow). Model types and imports name metamodels by nsURI, by a URI of the package registry, or by a metamodel file next to the transformation:
+
+```
+modeltype UML uses 'http://www.example.org/qvt/uml';
+modeltype RDBMS uses 'http://www.example.org/qvt/rdbms';
+
+transformation uml2rdbms(in source : UML, out target : RDBMS);
+
+main() {
+	source.rootObjects()[UML::Package]->map packageToSchema();
+}
+
+mapping UML::Package::packageToSchema() : RDBMS::Schema {
+	name := self.name;
+	tables := self.elements[UML::Class]->map classToTable();
+}
+
+mapping UML::Class::classToTable() : RDBMS::Table
+	when { self.persistent }
+{
+	name := self.name;
+	…
+}
+```
+
+The expressions are OCL — Oxychloride's OCL, extended by Imperative OCL (variables, assignments, loops, `object`, `map`, `resolve`, `log`, `assert`) — so they are type checked like OCL and can use the operation bodies and derived features of the metamodels. A QVT Relations transformation runs in the direction of one of its models: for each binding of the other models' patterns that satisfies a relation's `when` clause, the pattern of the target is matched and, where it does not match, enforced (objects identified by keys are reused); in check mode only the bindings that do not hold are reported. Transformations run on copies of the workspace's models (`runQvt`, `oxy qvt`): the results come back as XMI or HUTN, with what the transformation logged, the problems it met and the invariants the results violate. `examples/qvt` has the same transformation in both languages; they produce the same schema. See [docs/QVT.md](docs/QVT.md) for what is supported.
+
 ## VS Code extension
 
 See [vscode/README.md](vscode/README.md). In short: `cargo build -p oxy-cli`, then open `vscode/` in VS Code and press F5 (or `cd vscode && npm install && npm run package` for a `.vsix` with the language server inside).
@@ -169,19 +205,21 @@ See [vscode/README.md](vscode/README.md). In short: `cargo build -p oxy-cli`, th
 | Path | |
 |---|---|
 | `crates/oxy-ecore` | Ecore metamodels (`.ecore` loading, embedded `Ecore.ecore`), dynamic instance models, XMI loading, HUTN, XML Schema generation |
-| `crates/oxy-ocl` | OCL lexer, parser (expressions and Complete OCL documents), type checker, evaluator, standard library, validation |
+| `crates/oxy-ocl` | OCL lexer, parser (expressions and Complete OCL documents; the QVT dialect with Imperative OCL), type checker, evaluator, standard library, validation |
 | `crates/oxy-henshin` | Henshin's textual syntax and `.henshin` models (reading, writing, JavaScript expressions), rules and units resolved against metamodels, graph matching and transformation, state space exploration |
+| `crates/oxy-qvt` | QVT transformations: Operational Mappings and Relations (parsers on OCL's QVT dialect, compilers, interpreters) |
 | `crates/oxy-codegen` | Code generation: the code model of a metamodel with its OCL lowered, the Python and Rust targets and their runtimes |
-| `crates/oxychloride` | `Workspace` API, JSON protocol types, JSON-RPC server, editor support (hover, completion), metamodel and rule diagrams and their edits, transformation sessions, converting and syncing the two syntaxes of Henshin |
+| `crates/oxychloride` | `Workspace` API, JSON protocol types, JSON-RPC server, editor support (hover, completion), metamodel and rule diagrams and their edits, transformation sessions, converting and syncing the two syntaxes of Henshin, QVT documents and runs |
 | `crates/oxy-cli` | The `oxy` command line tool |
 | `crates/oxy-ffi` | C ABI (`cdylib`/`staticlib`) |
 | `crates/oxy-lsp` | Language server (`oxy lsp`) |
-| `vscode/` | VS Code extension (TypeScript; grammars, views, OCL console, metamodel diagram, transformation view) |
+| `vscode/` | VS Code extension (TypeScript; grammars, views, OCL console, metamodel diagram, transformation view, running QVT transformations) |
 | `assets/file-icons` | Icons of the document kinds (the extension ships a copy) |
 | `examples/library` | Example metamodel with embedded OCL, model (XMI and HUTN), and Complete OCL document |
 | `examples/university` | Example metamodel in OCLinEcore (with pre- and postconditions), model in HUTN, and Henshin transformations (as text and as the equivalent `.henshin` model) |
 | `examples/philosophers` | The dining philosophers: metamodel, model and Henshin rules (text and `.henshin`) for state space exploration |
-| `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [code generation](docs/CODEGEN.md) and [Henshin](docs/HENSHIN.md) notes |
+| `examples/qvt` | Class diagrams to relational schemas in QVT Operational Mappings and QVT Relations: both metamodels (OCLinEcore), a model (HUTN) |
+| `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [code generation](docs/CODEGEN.md), [Henshin](docs/HENSHIN.md) and [QVT](docs/QVT.md) notes |
 
 `cargo build` / `cargo test` cover the engine, the CLI, the C ABI and the language server; the extension is built with npm (see [vscode/README.md](vscode/README.md)).
 

@@ -1,0 +1,30 @@
+-- A small class-diagram metamodel: the source of the transformations to relational schemas
+-- (uml2rdbms.qvto and uml2rdbms.qvtr, which mean the same).
+
+package uml : uml = 'http://www.example.org/qvt/uml' {
+  abstract class NamedElement {
+    attribute name : String;
+  }
+
+  class Package extends NamedElement {
+    property elements#namespace : PackageableElement[*] { ordered, composes };
+  }
+
+  abstract class PackageableElement extends NamedElement {
+    property namespace#elements : Package[?];
+  }
+
+  class PrimitiveType extends PackageableElement;
+
+  class Class extends PackageableElement {
+    -- Only persistent classes get a table.
+    attribute persistent : Boolean;
+    property attributes#owner : Attribute[*] { ordered, composes };
+  }
+
+  class Attribute extends NamedElement {
+    property owner#attributes : Class[?];
+    -- A primitive type (a column), or a class (a foreign key).
+    property type : PackageableElement;
+  }
+}

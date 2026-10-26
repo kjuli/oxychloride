@@ -9,6 +9,7 @@ rust-version.workspace = true
 oxy-ecore.workspace = true
 oxy-ocl.workspace = true
 oxy-henshin.workspace = true
+oxy-qvt.workspace = true
 oxy-codegen.workspace = true
 serde.workspace = true
 serde_json.workspace = true

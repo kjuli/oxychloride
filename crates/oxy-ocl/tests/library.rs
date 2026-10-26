@@ -375,3 +375,60 @@ fn reports_operations_whose_contracts_cannot_be_enumerated() {
         ev.take_contract_checks().into_iter().map(|c| env.operation_constraints()[c.constraint].kind).collect();
     assert_eq!(statuses, [oxy_ocl::syntax::ast::ConstraintKind::Pre]);
 }
+
+#[test]
+fn deep_recursion_ends_with_invalid_not_a_crash() {
+    let (mm, model) = setup();
+    let env = env(
+        &mm,
+        Some("context Library def: depth(n : Integer) : Integer = if n = 0 then 0 else depth(n - 1) + 1 endif"),
+    );
+    assert_eq!(diagnostics(&env), Vec::<String>::new());
+    let r = eval(&mm, &model, &env, Some("Library"), "depth(100000)");
+    assert!(r.contains("maximum call depth exceeded"), "{r}");
+    assert_eq!(eval(&mm, &model, &env, Some("Library"), "depth(200)"), "200");
+}
+
+/// The QVT dialect: Imperative OCL, checked and evaluated without a transformation around it
+/// (variables, assignments, loops, `return`), on a model the evaluator may change.
+#[test]
+fn imperative_ocl_in_the_qvt_dialect() {
+    use oxy_ocl::syntax::{Dialect, Parser};
+    let (mm, mut model) = setup();
+    let env = env(&mm, None);
+    let src = r#"{
+        var total := 0;
+        var names : Sequence(String) := Sequence{};
+        self.books->forEach(b | b.copies > 1) { total += b.copies; names += b.name; };
+        var i := 0;
+        while (i < 10) { i := i + 1; if (i = 3) { break; } };
+        self.name := self.name + '!';
+        return names->size().toString() + ' ' + total.toString() + ' ' + i.toString() + ' ' + self.name;
+    }"#;
+    let mut p = Parser::with_dialect(src, Dialect::Qvt);
+    let e = p.expr();
+    assert!(p.diagnostics().is_empty(), "{:?}", p.diagnostics());
+    let library = mm.find_classifiers("Library")[0];
+    let (t, d) = env.check_expression(&mm, &e, Some(library));
+    assert!(d.is_empty(), "{d:?}");
+    assert_eq!(t, Type::OclVoid);
+    let lib = model.instances_of(&mm, library)[0];
+    let mut ev = Evaluator::new_mut(&mm, &mut model, &env);
+    let v = ev.call_frame(Some(Value::Object(lib)), &[], |ev| {
+        ev.eval(&e);
+        ev.take_return()
+    });
+    assert_eq!(v.flatten().map(|v| v.to_string()), Some("'1 2 3 City Library!'".to_string()));
+    assert!(ev.take_errors().is_empty());
+
+    // Without a mutable model, assignments fail (and say so).
+    let mut ev = Evaluator::new(&mm, &model, &env);
+    let e = Parser::with_dialect("self.name := 'x'", Dialect::Qvt).expr();
+    ev.evaluate(&e, Some(Value::Object(lib)), &[]);
+    let errors = ev.take_errors();
+    assert!(errors[0].1.contains("cannot be changed"), "{errors:?}");
+
+    // The OCL dialect does not know these constructs.
+    let (_, d) = parse_expression("x := 1");
+    assert!(!d.is_empty());
+}

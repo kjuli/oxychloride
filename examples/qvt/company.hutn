@@ -1,0 +1,45 @@
+// A class diagram (uml.oclinecore) to transform into a relational schema:
+//   oxy qvt uml2rdbms.qvto -e uml.oclinecore -e rdbms.oclinecore --in source=company.hutn
+//   oxy qvt uml2rdbms.qvtr -e uml.oclinecore -e rdbms.oclinecore --in source=company.hutn
+//
+// Person and Company are persistent: each gets a table with a primary key, a column per
+// attribute of a primitive type, and a foreign key per attribute typed by a persistent class
+// (Person's employer). Address is not persistent: it gets no table, and Person's address no
+// column.
+
+@Spec {
+  metamodel "uml" {
+    nsUri: "http://www.example.org/qvt/uml"
+  }
+}
+
+uml {
+  Package "company" {
+    name: "company"
+    elements:
+      PrimitiveType "String" { name: "String" },
+      PrimitiveType "Integer" { name: "Integer" },
+      PrimitiveType "Boolean" { name: "Boolean" },
+      Class "Person" {
+        name: "Person"
+        persistent: true
+        attributes:
+          Attribute { name: "name" type: PrimitiveType "String" },
+          Attribute { name: "age" type: PrimitiveType "Integer" },
+          Attribute { name: "employer" type: Class "Company" },
+          Attribute { name: "address" type: Class "Address" }
+      },
+      Class "Company" {
+        name: "Company"
+        persistent: true
+        attributes:
+          Attribute { name: "name" type: PrimitiveType "String" },
+          Attribute { name: "listed" type: PrimitiveType "Boolean" }
+      },
+      Class "Address" {
+        name: "Address"
+        persistent: false
+        attributes: Attribute { name: "street" type: PrimitiveType "String" }
+      }
+  }
+}

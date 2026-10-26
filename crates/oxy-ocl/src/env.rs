@@ -270,6 +270,80 @@ impl Environment {
     }
 }
 
+/// A name standing for packages, as QVT's model types do (`modeltype UML uses '…'`): with
+/// it, `UML::Class` names a classifier of those packages (or of their subpackages:
+/// `UML::sub::Class`), and unqualified names are looked up in them first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageAlias {
+    pub name: String,
+    pub packages: Vec<PackageId>,
+}
+
+/// Resolves a classifier name like [`lookup_classifier`], with package aliases.
+pub(crate) fn lookup_classifier_in(
+    mm: &Metamodel,
+    package: Option<PackageId>,
+    aliases: &[PackageAlias],
+    path: &[&str],
+) -> Result<ClassifierId, String> {
+    if aliases.is_empty() {
+        return lookup_classifier(mm, package, path);
+    }
+    let (packages, rest): (Vec<PackageId>, &[&str]) = match path {
+        [first, rest @ ..] if !rest.is_empty() => match aliases.iter().find(|a| a.name == *first) {
+            Some(a) => (a.packages.clone(), rest),
+            None => return lookup_classifier(mm, package, path),
+        },
+        [_] => (aliases.iter().flat_map(|a| a.packages.iter().copied()).collect(), path),
+        _ => return lookup_classifier(mm, package, path),
+    };
+    let mut found: Vec<ClassifierId> = Vec::new();
+    for p in packages {
+        for c in find_in_package(mm, p, rest) {
+            if !found.contains(&c) {
+                found.push(c);
+            }
+        }
+    }
+    match found.as_slice() {
+        [c] => Ok(*c),
+        [] if path.len() == 1 => lookup_classifier(mm, package, path),
+        [] => Err(format!("unknown type '{}'", path.join("::"))),
+        _ => Err(format!(
+            "ambiguous type '{}': could be {}",
+            path.join("::"),
+            found.iter().map(|c| mm.qualified_name(*c)).collect::<Vec<_>>().join(", ")
+        )),
+    }
+}
+
+/// The classifiers `path` names in a package: `[Class]` (directly in it, else in a
+/// subpackage), `[sub, Class]`, or the package's own name first (`[pkg, Class]`).
+fn find_in_package(mm: &Metamodel, package: PackageId, path: &[&str]) -> Vec<ClassifierId> {
+    match path {
+        [] => Vec::new(),
+        [name] => {
+            if let Some(c) = mm.find_classifier_in(package, name) {
+                return vec![c];
+            }
+            mm.package(package).subpackages.iter().flat_map(|s| find_in_package(mm, *s, path)).collect()
+        }
+        [first, rest @ ..] => {
+            let mut out: Vec<ClassifierId> = mm
+                .package(package)
+                .subpackages
+                .iter()
+                .filter(|s| mm.package(**s).name == *first)
+                .flat_map(|s| find_in_package(mm, *s, rest))
+                .collect();
+            if out.is_empty() && mm.package(package).name == *first {
+                out = find_in_package(mm, package, rest);
+            }
+            out
+        }
+    }
+}
+
 /// Resolves a classifier name, preferring the given package for unqualified names.
 pub(crate) fn lookup_classifier(
     mm: &Metamodel,
@@ -305,6 +379,17 @@ pub(crate) fn resolve_type(
     te: &TypeExpr,
     diags: &mut Vec<Diagnostic>,
 ) -> Type {
+    resolve_type_in(mm, package, &[], te, diags)
+}
+
+/// Resolves a type expression with package aliases; reports problems to `diags`.
+pub(crate) fn resolve_type_in(
+    mm: &Metamodel,
+    package: Option<PackageId>,
+    aliases: &[PackageAlias],
+    te: &TypeExpr,
+    diags: &mut Vec<Diagnostic>,
+) -> Type {
     match &te.kind {
         TypeExprKind::Path(path) => {
             if let [single] = path.as_slice()
@@ -313,7 +398,7 @@ pub(crate) fn resolve_type(
                 return t;
             }
             let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
-            match lookup_classifier(mm, package, &names) {
+            match lookup_classifier_in(mm, package, aliases, &names) {
                 Ok(c) => Type::of_classifier(mm, c),
                 Err(e) => {
                     diags.push(Diagnostic::error(te.span, e));
@@ -321,10 +406,12 @@ pub(crate) fn resolve_type(
                 }
             }
         }
-        TypeExprKind::Collection(kind, elem) => Type::collection(*kind, resolve_type(mm, package, elem, diags)),
-        TypeExprKind::Tuple(parts) => {
-            Type::tuple(parts.iter().map(|(n, t)| (n.name.clone(), resolve_type(mm, package, t, diags))).collect())
+        TypeExprKind::Collection(kind, elem) => {
+            Type::collection(*kind, resolve_type_in(mm, package, aliases, elem, diags))
         }
+        TypeExprKind::Tuple(parts) => Type::tuple(
+            parts.iter().map(|(n, t)| (n.name.clone(), resolve_type_in(mm, package, aliases, t, diags))).collect(),
+        ),
         TypeExprKind::Error => Type::Error,
     }
 }

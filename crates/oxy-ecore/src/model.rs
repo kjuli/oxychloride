@@ -49,6 +49,8 @@ pub struct Object {
     pub resource: usize,
     pub xmi_id: Option<String>,
     values: Vec<(FeatureId, Vec<ModelValue>)>,
+    /// Deleted by [`Model::delete`]: no longer part of any resource.
+    deleted: bool,
 }
 
 impl Object {
@@ -141,12 +143,12 @@ impl Model {
 
     /// All objects whose class conforms to `class`.
     pub fn instances_of(&self, mm: &Metamodel, class: ClassifierId) -> Vec<ObjectId> {
-        self.object_ids().filter(|o| mm.conforms_to(self.class_of(*o), class)).collect()
+        self.object_ids().filter(|o| !self.is_deleted(*o) && mm.conforms_to(self.class_of(*o), class)).collect()
     }
 
     /// All objects whose class is exactly `class`.
     pub fn instances_of_exact(&self, class: ClassifierId) -> Vec<ObjectId> {
-        self.object_ids().filter(|o| self.class_of(*o) == class).collect()
+        self.object_ids().filter(|o| !self.is_deleted(*o) && self.class_of(*o) == class).collect()
     }
 
     /// Creates a new object. If `container` is `None`, the object becomes a root of `resource`.
@@ -158,7 +160,14 @@ impl Model {
         container: Option<(ObjectId, FeatureId)>,
     ) -> ObjectId {
         let id = ObjectId(self.objects.len() as u32);
-        self.objects.push(Object { class, container: None, resource, xmi_id: None, values: Vec::new() });
+        self.objects.push(Object {
+            class,
+            container: None,
+            resource,
+            xmi_id: None,
+            values: Vec::new(),
+            deleted: false,
+        });
         match container {
             Some((parent, feature)) => self.add(mm, parent, feature, ModelValue::Object(id)),
             None => self.resources[resource].roots.push(id),
@@ -283,6 +292,150 @@ impl Model {
     /// Replaces all values of a feature (without maintaining opposites).
     pub fn set_raw(&mut self, id: ObjectId, feature: FeatureId, values: Vec<ModelValue>) {
         *self.slot_mut(id, feature) = values;
+    }
+
+    /// Adds a value to a feature as EMF does: a single-valued feature loses its previous value
+    /// (and that value its back-link), an object added to a containment feature leaves its
+    /// previous container (or the roots of its resource), and a single-valued opposite drops
+    /// the link it had before.
+    pub fn insert(&mut self, mm: &Metamodel, id: ObjectId, feature: FeatureId, value: ModelValue) {
+        let f = mm.feature(feature);
+        if f.is_many() {
+            if f.multiplicity.unique && self.get(id, feature).contains(&value) {
+                return;
+            }
+        } else {
+            if self.get(id, feature) == std::slice::from_ref(&value) {
+                return;
+            }
+            self.clear(mm, id, feature);
+        }
+        if let ModelValue::Object(target) = value {
+            if f.is_containment() {
+                self.detach(mm, target);
+            }
+            if let Some(opposite) = f.opposite() {
+                let op = mm.feature(opposite);
+                if !op.is_many() {
+                    let previous: Vec<ModelValue> = self.get(target, opposite).to_vec();
+                    for p in previous {
+                        if p != ModelValue::Object(id) {
+                            self.remove(mm, target, opposite, &p);
+                        }
+                    }
+                }
+                // Becoming contained by `target`: out of the previous container (or the roots).
+                if op.is_containment() && self.objects[id.index()].container != Some((target, opposite)) {
+                    self.detach(mm, id);
+                }
+            }
+        }
+        self.add(mm, id, feature, value);
+    }
+
+    /// Replaces all values of a feature (EMF's `eSet`), maintaining containment and opposites.
+    pub fn set(&mut self, mm: &Metamodel, id: ObjectId, feature: FeatureId, values: Vec<ModelValue>) {
+        self.clear(mm, id, feature);
+        for v in values {
+            self.insert(mm, id, feature, v);
+        }
+    }
+
+    /// Removes all values of a feature, maintaining containment and opposites.
+    pub fn clear(&mut self, mm: &Metamodel, id: ObjectId, feature: FeatureId) {
+        let values: Vec<ModelValue> = self.get(id, feature).to_vec();
+        for v in values.iter().rev() {
+            self.remove(mm, id, feature, v);
+        }
+    }
+
+    /// Removes one occurrence of a value from a feature, with the back-link of its opposite. An
+    /// object removed from a containment feature has no container any more (and is not a root
+    /// either: add it somewhere, or [`Model::make_root`]). Returns whether it was there.
+    pub fn remove(&mut self, mm: &Metamodel, id: ObjectId, feature: FeatureId, value: &ModelValue) -> bool {
+        let slot = self.slot_mut(id, feature);
+        let Some(pos) = slot.iter().position(|v| v == value) else { return false };
+        slot.remove(pos);
+        let ModelValue::Object(target) = value else { return true };
+        let f = mm.feature(feature);
+        if f.is_containment() && self.objects[target.index()].container == Some((id, feature)) {
+            self.objects[target.index()].container = None;
+        }
+        if let Some(opposite) = f.opposite() {
+            let back = ModelValue::Object(id);
+            let slot = self.slot_mut(*target, opposite);
+            if let Some(p) = slot.iter().position(|v| *v == back) {
+                slot.remove(p);
+            }
+            if mm.feature(opposite).is_containment() && self.objects[id.index()].container == Some((*target, opposite))
+            {
+                self.objects[id.index()].container = None;
+            }
+        }
+        true
+    }
+
+    /// Takes an object out of its container, or out of the roots of its resource.
+    pub fn detach(&mut self, mm: &Metamodel, id: ObjectId) {
+        match self.objects[id.index()].container {
+            Some((parent, feature)) => {
+                self.remove(mm, parent, feature, &ModelValue::Object(id));
+                self.objects[id.index()].container = None;
+            }
+            None => {
+                let resource = self.objects[id.index()].resource;
+                self.resources[resource].roots.retain(|r| *r != id);
+            }
+        }
+    }
+
+    /// Replaces the roots of a resource (objects that are no root any more are not part of it,
+    /// unless contained by one).
+    pub fn set_roots(&mut self, resource: usize, roots: Vec<ObjectId>) {
+        self.resources[resource].roots = roots;
+    }
+
+    /// Makes an object without a container a root of its resource.
+    pub fn make_root(&mut self, id: ObjectId) {
+        let object = &self.objects[id.index()];
+        if object.container.is_none() {
+            let resource = object.resource;
+            if !self.resources[resource].roots.contains(&id) {
+                self.resources[resource].roots.push(id);
+            }
+        }
+    }
+
+    /// Whether an object was deleted (see [`Model::delete`]).
+    pub fn is_deleted(&self, id: ObjectId) -> bool {
+        self.objects[id.index()].deleted
+    }
+
+    /// Deletes an object and its contents (EMF's `EcoreUtil.delete`): they leave their container
+    /// or resource, and every reference to them is removed. Their ids are not reused.
+    pub fn delete(&mut self, mm: &Metamodel, id: ObjectId) {
+        let mut doomed = vec![id];
+        doomed.extend(self.all_contents(mm, id));
+        self.detach(mm, id);
+        let doomed_set: std::collections::HashSet<ObjectId> = doomed.iter().copied().collect();
+        for o in 0..self.objects.len() {
+            let o = ObjectId(o as u32);
+            if doomed_set.contains(&o) || self.objects[o.index()].deleted {
+                continue;
+            }
+            for (_, values) in &mut self.objects[o.index()].values {
+                values.retain(|v| !matches!(v, ModelValue::Object(t) if doomed_set.contains(t)));
+            }
+        }
+        for d in doomed {
+            let object = &mut self.objects[d.index()];
+            object.values.clear();
+            object.container = None;
+            object.deleted = true;
+            let resource = object.resource;
+            self.resources[resource].roots.retain(|r| *r != d);
+            self.resources[resource].ids.retain(|_, o| *o != d);
+        }
     }
 
     /// Direct children of an object via containment features.

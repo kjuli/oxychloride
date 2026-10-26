@@ -308,6 +308,8 @@ impl<'a> Lowerer<'a> {
                 out.sort_by(|a, b| a.0.cmp(&b.0));
                 Expr::new(ExprKind::TupleLiteral(out), ty)
             }
+            // Imperative OCL appears in QVT transformations only, never in metamodels.
+            _ => self.unsupported("Imperative OCL"),
         }
     }
 

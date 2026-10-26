@@ -24,6 +24,9 @@ pub enum Type {
     Tuple(Rc<Vec<(String, Type)>>),
     /// The type of an expression that denotes a type, e.g. `Book` in `Book.allInstances()`.
     Meta(Rc<Type>),
+    /// A model (an extent of objects) of the named model type: the parameters of QVT
+    /// transformations.
+    Model(Rc<str>),
     /// Unknown because of an earlier error; suppresses follow-up diagnostics.
     Error,
 }
@@ -179,6 +182,7 @@ impl fmt::Display for TypeDisplay<'_> {
                 f.write_str(")")
             }
             Type::Meta(t) => write!(f, "{}", t.display(self.mm)),
+            Type::Model(name) => write!(f, "Model({name})"),
         }
     }
 }

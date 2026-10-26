@@ -3,15 +3,23 @@
 //! The parser never fails: syntax errors are reported as diagnostics and the affected
 //! parts of the tree are replaced by [`ExprKind::Error`] nodes, so later phases can still
 //! check the rest of a document (which is what an editor needs).
+//!
+//! [`Parser`] is public so that languages embedding OCL (QVT) can parse their documents on
+//! the same token stream: their parsers use the token helpers and call [`Parser::expr`] and
+//! [`Parser::type_expr`] for the OCL parts. In the QVT dialect ([`Dialect::Qvt`]) expressions
+//! include Imperative OCL and the expressions of QVT Operational Mappings (`imperative.rs`).
 
+mod imperative;
 mod oclinecore;
+
+pub use imperative::{QVT_ITERATORS, RESOLVE_OPERATIONS};
 
 pub use oclinecore::{
     FEATURE_QUALIFIERS, GENMODEL_SOURCE, OPERATION_QUALIFIERS, PARAMETER_QUALIFIERS, parse_ecore_document,
 };
 
 use super::ast::*;
-use super::lexer::{Keyword, Token, TokenKind, tokenize};
+use super::lexer::{Dialect, Keyword, Token, TokenKind, tokenize_dialect};
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
 
@@ -37,46 +45,121 @@ pub fn parse_document(src: &str) -> (Document, Vec<Diagnostic>) {
 const DOCUMENT_WORDS: &[&str] =
     &["import", "package", "endpackage", "context", "inv", "def", "static", "pre", "post", "body", "init", "derive"];
 
-pub(crate) struct Parser {
+/// Words that start an element of a QVT document: an expression ends before them when they
+/// are followed by a name or a `{` (they are not reserved otherwise).
+const QVT_DOCUMENT_WORDS: &[&str] = &[
+    "mapping",
+    "query",
+    "helper",
+    "main",
+    "modeltype",
+    "metamodel",
+    "transformation",
+    "library",
+    "configuration",
+    "intermediate",
+    "constructor",
+    "import",
+    "property",
+    "abstract",
+    "blackbox",
+    "relation",
+    "top",
+    "checkonly",
+    "enforce",
+    "domain",
+    "primitive",
+    "key",
+    "when",
+    "where",
+    "init",
+    "end",
+    "population",
+    "default_values",
+    "tag",
+];
+
+/// A recursive-descent parser over the tokens of one source.
+pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     pub(crate) diags: Vec<Diagnostic>,
     next_id: u32,
+    dialect: Dialect,
+}
+
+/// A position to go back to (see [`Parser::mark`]).
+#[derive(Copy, Clone, Debug)]
+pub struct Mark {
+    pos: usize,
+    diags: usize,
 }
 
 impl Parser {
-    pub(crate) fn new(src: &str) -> Self {
-        let (tokens, diags) = tokenize(src);
-        Parser { tokens, pos: 0, diags, next_id: 0 }
+    /// A parser for OCL.
+    pub fn new(src: &str) -> Self {
+        Parser::with_dialect(src, Dialect::Ocl)
+    }
+
+    /// A parser for OCL in the given dialect.
+    pub fn with_dialect(src: &str, dialect: Dialect) -> Self {
+        let (tokens, diags) = tokenize_dialect(src, dialect);
+        Parser { tokens, pos: 0, diags, next_id: 0, dialect }
+    }
+
+    pub fn dialect(&self) -> Dialect {
+        self.dialect
+    }
+
+    /// The problems found so far.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diags
+    }
+
+    pub fn into_diagnostics(self) -> Vec<Diagnostic> {
+        self.diags
+    }
+
+    /// The current position, to go back to with [`Parser::rewind`] (for speculative parsing).
+    pub fn mark(&self) -> Mark {
+        Mark { pos: self.pos, diags: self.diags.len() }
+    }
+
+    /// Goes back to a position, forgetting the problems reported since.
+    pub fn rewind(&mut self, mark: Mark) {
+        self.pos = mark.pos;
+        self.diags.truncate(mark.diags);
     }
 
     // ------------------------------------------------------------ token helpers
 
-    fn peek(&self) -> &TokenKind {
+    pub fn peek(&self) -> &TokenKind {
         &self.tokens[self.pos].kind
     }
 
-    fn peek_at(&self, n: usize) -> &TokenKind {
+    pub fn peek_at(&self, n: usize) -> &TokenKind {
         &self.tokens[(self.pos + n).min(self.tokens.len() - 1)].kind
     }
 
-    fn peek_token(&self) -> &Token {
+    pub fn peek_token(&self) -> &Token {
         &self.tokens[self.pos]
     }
 
-    fn span(&self) -> Span {
+    /// The span of the current token.
+    pub fn span(&self) -> Span {
         self.tokens[self.pos].span
     }
 
-    fn prev_span(&self) -> Span {
+    /// The span of the previous token.
+    pub fn prev_span(&self) -> Span {
         self.tokens[self.pos.saturating_sub(1)].span
     }
 
-    fn at_eof(&self) -> bool {
+    pub fn at_eof(&self) -> bool {
         matches!(self.peek(), TokenKind::Eof)
     }
 
-    fn bump(&mut self) -> Token {
+    pub fn bump(&mut self) -> Token {
         let t = self.tokens[self.pos].clone();
         if self.pos < self.tokens.len() - 1 {
             self.pos += 1;
@@ -85,26 +168,50 @@ impl Parser {
     }
 
     /// Compares token kinds, ignoring payloads (except for keywords).
-    fn at(&self, kind: &TokenKind) -> bool {
+    pub fn at(&self, kind: &TokenKind) -> bool {
         match (self.peek(), kind) {
             (TokenKind::Keyword(a), TokenKind::Keyword(b)) => a == b,
             (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
         }
     }
 
-    fn at_kw(&self, kw: Keyword) -> bool {
+    pub fn at_kw(&self, kw: Keyword) -> bool {
         matches!(self.peek(), TokenKind::Keyword(k) if *k == kw)
     }
 
     /// Whether the current token is the (unquoted) word `w`.
-    fn at_word(&self, w: &str) -> bool {
+    pub fn at_word(&self, w: &str) -> bool {
         matches!(self.peek(), TokenKind::Ident(n) if n == w)
     }
 
-    /// Whether the current token starts a document-level element (`inv:`, `context X`, ...).
-    /// Document keywords are not reserved, so `body` may still be used as a property name;
-    /// the following token disambiguates.
-    fn at_document_word(&self) -> bool {
+    /// Whether the token `n` ahead is the (unquoted) word `w`.
+    pub fn at_word_ahead(&self, n: usize, w: &str) -> bool {
+        matches!(self.peek_at(n), TokenKind::Ident(x) if x == w)
+    }
+
+    /// Consumes the word `w` if it is the current token.
+    pub fn eat_word(&mut self, w: &str) -> bool {
+        if self.at_word(w) {
+            self.bump();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether the current token starts a document-level element (`inv:`, `context X`, ...;
+    /// in the QVT dialect `mapping x`, `when {`, ...). Document keywords are not reserved, so
+    /// `body` may still be used as a property name; the following token disambiguates.
+    pub fn at_document_word(&self) -> bool {
+        if self.dialect == Dialect::Qvt {
+            return match self.peek() {
+                TokenKind::Ident(w) if QVT_DOCUMENT_WORDS.contains(&w.as_str()) => match w.as_str() {
+                    "main" => matches!(self.peek_at(1), TokenKind::LParen),
+                    _ => matches!(self.peek_at(1), TokenKind::Ident(_) | TokenKind::QuotedIdent(_) | TokenKind::LBrace),
+                },
+                _ => false,
+            };
+        }
         match self.peek() {
             TokenKind::Ident(w) if DOCUMENT_WORDS.contains(&w.as_str()) => match w.as_str() {
                 "endpackage" => true,
@@ -115,7 +222,7 @@ impl Parser {
         }
     }
 
-    fn eat(&mut self, kind: &TokenKind) -> bool {
+    pub fn eat(&mut self, kind: &TokenKind) -> bool {
         if self.at(kind) {
             self.bump();
             true
@@ -124,7 +231,7 @@ impl Parser {
         }
     }
 
-    fn eat_kw(&mut self, kw: Keyword) -> bool {
+    pub fn eat_kw(&mut self, kw: Keyword) -> bool {
         if self.at_kw(kw) {
             self.bump();
             true
@@ -133,7 +240,8 @@ impl Parser {
         }
     }
 
-    fn error(&mut self, span: Span, message: impl Into<String>) {
+    /// Reports an error (unless one was reported at the same place already).
+    pub fn error(&mut self, span: Span, message: impl Into<String>) {
         // Avoid cascades of errors at the same location.
         if self.diags.last().is_some_and(|d| d.span == span) {
             return;
@@ -141,7 +249,13 @@ impl Parser {
         self.diags.push(Diagnostic::error(span, message));
     }
 
-    fn expect(&mut self, kind: &TokenKind, context: &str) -> bool {
+    /// Reports a warning.
+    pub fn warning(&mut self, span: Span, message: impl Into<String>) {
+        self.diags.push(Diagnostic::warning(span, message));
+    }
+
+    /// Consumes a token of the given kind, or reports that it is missing.
+    pub fn expect(&mut self, kind: &TokenKind, context: &str) -> bool {
         if self.eat(kind) {
             return true;
         }
@@ -150,7 +264,18 @@ impl Parser {
         false
     }
 
-    fn ident(&mut self, what: &str) -> Ident {
+    /// Consumes the word `w`, or reports that it is missing.
+    pub fn expect_word(&mut self, w: &str, context: &str) -> bool {
+        if self.eat_word(w) {
+            return true;
+        }
+        let t = self.peek_token().clone();
+        self.error(t.span, format!("expected '{w}' {context}, found {}", t.kind));
+        false
+    }
+
+    /// Consumes a name (`what` says which, for the error when there is none).
+    pub fn ident(&mut self, what: &str) -> Ident {
         match self.peek().clone() {
             TokenKind::Ident(name) | TokenKind::QuotedIdent(name) => {
                 let t = self.bump();
@@ -164,24 +289,30 @@ impl Parser {
         }
     }
 
-    fn at_ident(&self) -> bool {
+    pub fn at_ident(&self) -> bool {
         matches!(self.peek(), TokenKind::Ident(_) | TokenKind::QuotedIdent(_))
     }
 
-    fn mk(&mut self, kind: ExprKind, span: Span) -> Expr {
+    /// A new expression node (with a fresh id).
+    pub fn mk(&mut self, kind: ExprKind, span: Span) -> Expr {
         let id = ExprId(self.next_id);
         self.next_id += 1;
         Expr { id, span, kind }
     }
 
-    fn error_expr(&mut self, span: Span) -> Expr {
+    pub fn error_expr(&mut self, span: Span) -> Expr {
         self.mk(ExprKind::Error, span)
     }
 
     // ------------------------------------------------------------ expressions
 
-    pub(crate) fn expr(&mut self) -> Expr {
-        self.binary(0)
+    /// Parses an expression (in the QVT dialect including assignments: `x := e`, `x += e`).
+    pub fn expr(&mut self) -> Expr {
+        let e = self.binary(0);
+        if self.dialect == Dialect::Qvt {
+            return self.assignment(e);
+        }
+        e
     }
 
     fn binary_op(&self) -> Option<(BinOp, u8)> {
@@ -251,6 +382,15 @@ impl Parser {
 
     fn postfix(&mut self, mut expr: Expr) -> Expr {
         loop {
+            if self.dialect == Dialect::Qvt {
+                match self.qvt_postfix(expr) {
+                    Ok(e) => {
+                        expr = e;
+                        continue;
+                    }
+                    Err(e) => expr = *e,
+                }
+            }
             let (arrow, safe) = match self.peek() {
                 TokenKind::Dot => (false, false),
                 TokenKind::SafeDot => (false, true),
@@ -259,7 +399,16 @@ impl Parser {
                 _ => return expr,
             };
             self.bump();
-            let name = self.ident("a property or operation name");
+            let name = match self.peek().clone() {
+                // `x.not()` and the like: operation names in QVT.
+                TokenKind::Keyword(
+                    kw @ (Keyword::Not | Keyword::And | Keyword::Or | Keyword::Xor | Keyword::Implies),
+                ) if self.dialect == Dialect::Qvt => {
+                    let t = self.bump();
+                    Ident { name: kw.as_str().to_string(), span: t.span }
+                }
+                _ => self.ident("a property or operation name"),
+            };
             if arrow {
                 expr = self.arrow_call(expr, name, safe);
                 continue;
@@ -278,7 +427,8 @@ impl Parser {
         }
     }
 
-    fn args(&mut self) -> Vec<Expr> {
+    /// Parses a parenthesized argument list.
+    pub fn args(&mut self) -> Vec<Expr> {
         self.expect(&TokenKind::LParen, "to start the argument list");
         let mut args = Vec::new();
         if self.eat(&TokenKind::RParen) {
@@ -295,6 +445,22 @@ impl Parser {
     }
 
     fn arrow_call(&mut self, source: Expr, name: Ident, safe: bool) -> Expr {
+        if !self.at(&TokenKind::LParen) && self.dialect == Dialect::Qvt {
+            // `coll->name`: `coll->xcollect(name)`.
+            let body = self.mk(ExprKind::Name { path: vec![name.clone()], at_pre: false }, name.span);
+            let span = source.span.to(name.span);
+            let name = Ident { name: "xcollect".into(), span: name.span };
+            return self.mk(
+                ExprKind::Iterator {
+                    source: Box::new(source),
+                    name,
+                    iterators: Vec::new(),
+                    body: Box::new(body),
+                    safe,
+                },
+                span,
+            );
+        }
         if !self.at(&TokenKind::LParen) {
             let span = self.span();
             self.error(span, format!("expected '(' after '->{name}'"));
@@ -385,7 +551,7 @@ impl Parser {
         None
     }
 
-    fn var_decl(&mut self, require_init: bool) -> VarDecl {
+    pub fn var_decl(&mut self, require_init: bool) -> VarDecl {
         let name = self.ident("a variable name");
         let ty = if self.eat(&TokenKind::Colon) { Some(self.type_expr()) } else { None };
         let init = if require_init {
@@ -418,7 +584,15 @@ impl Parser {
                 self.bump();
                 self.mk(ExprKind::Unlimited, start)
             }
+            TokenKind::Keyword(Keyword::If) if self.dialect == Dialect::Qvt => {
+                self.bump();
+                self.qvt_if(start)
+            }
             TokenKind::Keyword(kw) => self.keyword_primary(kw, start),
+            TokenKind::LBrace if self.dialect == Dialect::Qvt => self.block(),
+            TokenKind::Ident(_) if self.dialect == Dialect::Qvt && self.at_imperative_word() => {
+                self.imperative_primary()
+            }
             TokenKind::LParen => {
                 self.bump();
                 let mut e = self.expr();
@@ -555,7 +729,11 @@ impl Parser {
     }
 
     fn name_primary(&mut self, name: &str, start: Span) -> Expr {
-        if let Some(kind) = CollectionKind::from_name(name) {
+        let kind = match name {
+            "List" if self.dialect == Dialect::Qvt => Some(CollectionKind::Sequence),
+            _ => CollectionKind::from_name(name),
+        };
+        if let Some(kind) = kind {
             match self.peek_at(1) {
                 TokenKind::LBrace => {
                     self.bump();
@@ -564,8 +742,11 @@ impl Parser {
                 TokenKind::LParen => {
                     let ty = self.type_expr();
                     if self.at(&TokenKind::LBrace) {
-                        let TypeExprKind::Collection(_, elem) = ty.kind else { unreachable!() };
-                        return self.collection_literal(kind, Some(*elem), start);
+                        let elem = match ty.kind {
+                            TypeExprKind::Collection(_, elem) => Some(*elem),
+                            _ => None,
+                        };
+                        return self.collection_literal(kind, elem, start);
                     }
                     let span = ty.span;
                     return self.mk(ExprKind::TypeLit(ty), span);
@@ -643,9 +824,21 @@ impl Parser {
 
     // ------------------------------------------------------------ types
 
-    pub(crate) fn type_expr(&mut self) -> TypeExpr {
+    /// Parses a type (`Integer`, `pkg::Class`, `Set(T)`, `Tuple(a : T)`; in the QVT dialect
+    /// also `List(T)`, a `Sequence`, and multiplicities such as `T[1]` or `T[*]`).
+    pub fn type_expr(&mut self) -> TypeExpr {
+        let t = self.plain_type_expr();
+        if self.dialect == Dialect::Qvt { self.type_multiplicity(t) } else { t }
+    }
+
+    fn plain_type_expr(&mut self) -> TypeExpr {
         let start = self.span();
         if let TokenKind::Ident(name) = self.peek().clone() {
+            if self.dialect == Dialect::Qvt
+                && let Some(t) = self.qvt_type(&name, start)
+            {
+                return t;
+            }
             if let Some(kind) = CollectionKind::from_name(&name)
                 && matches!(self.peek_at(1), TokenKind::LParen)
             {

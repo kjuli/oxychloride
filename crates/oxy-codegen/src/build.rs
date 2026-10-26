@@ -68,7 +68,7 @@ impl Index {
             T::UnlimitedNatural => Ty::UnlimitedNatural,
             T::OclAny => Ty::Any,
             T::OclVoid => Ty::Void,
-            T::OclInvalid | T::Error => Ty::Invalid,
+            T::OclInvalid | T::Error | T::Model(_) => Ty::Invalid,
             T::Classifier(c) => self.ty(mm, *c),
             T::Collection(k, e) => Ty::collection(*k, self.ocl_ty(mm, e)),
             T::Tuple(parts) => Ty::Tuple(parts.iter().map(|(n, t)| (n.clone(), self.ocl_ty(mm, t))).collect()),

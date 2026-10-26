@@ -1,7 +1,7 @@
 // Drives the extension in a real VS Code: live diagnostics for HUTN and XMI models, the views,
 // creating objects, the OCL console, validation, metamodel diagrams, Henshin transformations and
-// their rule diagrams, keeping a Henshin text and its `.henshin` file equivalent, and the package
-// registry.
+// their rule diagrams, keeping a Henshin text and its `.henshin` file equivalent, the package
+// registry, and QVT transformations.
 
 import * as assert from "node:assert";
 import * as fs from "node:fs";
@@ -492,10 +492,67 @@ describe("Oxychloride", () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
   });
 
+  it("checks, highlights and completes QVT transformations", async () => {
+    const uri = vscode.Uri.file(path.join(folder(), "qvt/uml2rdbms.qvto"));
+    const editor = await vscode.window.showTextDocument(uri);
+    const doc = editor.document;
+    assert.strictEqual(doc.languageId, "qvto");
+    const at = doc.positionAt(doc.getText().indexOf("self.persistent") + "self.".length);
+    await editor.edit((e) => e.insert(at, "X"));
+    await waitFor("unknown property", () => errors(uri).some((d) => d.message.includes("unknown property 'Xpersistent'")));
+    await vscode.commands.executeCommand("undo");
+    await waitFor("no errors", () => errors(uri).length === 0 || undefined);
+    // Completion after `self.` proposes the features of the mapping's class.
+    const completions = await vscode.commands.executeCommand<vscode.CompletionList>("vscode.executeCompletionItemProvider", uri, at);
+    const labels = completions.items.map((i) => (typeof i.label === "string" ? i.label : i.label.label));
+    assert.ok(labels.includes("persistent") && labels.includes("attributes"), labels.join(", "));
+    const relations = await vscode.workspace.openTextDocument(path.join(folder(), "qvt/uml2rdbms.qvtr"));
+    assert.strictEqual(relations.languageId, "qvtr");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
+  it("runs QVT transformations on models and checks models with QVT relations", async () => {
+    type Result = { outputs: { parameter: string; objects: number }[]; violations: string[]; problems: unknown[] };
+    const qvt = (file: string) => vscode.Uri.file(path.join(folder(), "qvt", file));
+    const model = qvt("company.hutn");
+    // Operational mappings, from the model (as from its context menu).
+    const operational = await vscode.commands.executeCommand<Result>("oxychloride.runQvt", model, {
+      transformation: qvt("uml2rdbms.qvto"),
+      outputs: { target: qvt("company.qvto.xmi") },
+      open: false,
+    });
+    assert.ok(operational, "the run");
+    assert.deepStrictEqual(operational.problems, []);
+    assert.strictEqual(operational.outputs[0].objects, 13);
+    const written = fs.readFileSync(qvt("company.qvto.xmi").fsPath, "utf8");
+    assert.ok(written.includes("<rdbms:Schema"), written);
+    // Relations, in the direction of the schema: the same schema.
+    const relational = await vscode.commands.executeCommand<Result>("oxychloride.runQvt", model, {
+      transformation: qvt("uml2rdbms.qvtr"),
+      target: "target",
+      check: false,
+      outputs: { target: qvt("company.qvtr.xmi") },
+      open: false,
+    });
+    assert.ok(relational, "the run");
+    assert.strictEqual(fs.readFileSync(qvt("company.qvtr.xmi").fsPath, "utf8"), written);
+    // Checking the written schema against the relations.
+    const check = await vscode.commands.executeCommand<Result>("oxychloride.runQvt", model, {
+      transformation: qvt("uml2rdbms.qvtr"),
+      target: "target",
+      check: true,
+      models: { target: qvt("company.qvto.xmi") },
+      open: false,
+    });
+    assert.ok(check, "the check");
+    assert.deepStrictEqual(check.violations, []);
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
   it("has icons for its languages", () => {
     const ext = vscode.extensions.getExtension("palladio.oxychloride")!;
     const languages: { id: string; icon?: { light: string; dark: string } }[] = ext.packageJSON.contributes.languages;
-    for (const id of ["ocl", "oclinecore", "hutn", "henshin"]) {
+    for (const id of ["ocl", "oclinecore", "hutn", "henshin", "qvto", "qvtr"]) {
       const icon = languages.find((l) => l.id === id)?.icon;
       assert.ok(icon, `no icon for ${id}`);
       for (const file of [icon.light, icon.dark]) {

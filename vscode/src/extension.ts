@@ -2,8 +2,8 @@
 // (metamodels, the package registry, models, validation results), an OCL console, commands to create model content,
 // XML Schemas for XMI models, the metamodel diagram (a graphical editor for `.ecore` and
 // `.oclinecore` files), the rule diagram (a graphical editor for Henshin texts and `.henshin`
-// files, which are kept equivalent in pairs), the transformation view for Henshin rules, and
-// code generation.
+// files, which are kept equivalent in pairs), the transformation view for Henshin rules, QVT
+// transformations (run on models from the context menu), and code generation.
 
 import * as path from "node:path";
 import * as vscode from "vscode";
@@ -14,6 +14,7 @@ import { Creator } from "./create";
 import { MetamodelDiagramEditor, openDiagram, type DiagramView } from "./diagram";
 import { documentName, reveal } from "./documents";
 import { HenshinPairs, counterpart } from "./henshinPairs";
+import { MODEL_FILES, QVT_FILES, QvtRunner, type QvtRunOptions } from "./qvt";
 import { PackageRegistry, type RegistryNode } from "./registry";
 import { RuleDiagramEditor, openRuleDiagram, type RuleDiagramView } from "./ruleDiagram";
 import {
@@ -30,7 +31,7 @@ import { serverExecutable } from "./server";
 import { TransformationPanel, chooseModel, chooseTransformation } from "./transformation";
 import { MetamodelTree, ModelTree, ValidationTree, shortName, type MetamodelNode, type ModelNode, type ValidationNode } from "./trees";
 
-const LANGUAGES = ["ocl", "oclinecore", "hutn", "henshin"];
+const LANGUAGES = ["ocl", "oclinecore", "hutn", "henshin", "qvto", "qvtr"];
 
 /** What the extension offers other extensions (and its tests). */
 export interface OxychlorideApi {
@@ -49,6 +50,8 @@ export interface OxychlorideApi {
   ruleDiagrams(): RuleDiagramView[];
   /** Keeps Henshin texts and `.henshin` files equivalent. */
   pairs: HenshinPairs;
+  /** Runs QVT transformations. */
+  qvt: QvtRunner;
   /** Opens the transformation view of a Henshin document (engine name) on a model resource. */
   openTransformation(document: string, model: string, tab?: "steps" | "space"): Promise<TransformationPanel>;
   /** Resolves once the language server is running. */
@@ -94,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
         { scheme: "file", language: "xml", pattern: "**/*.henshin" },
       ],
       // Registered metamodels may be Ecore XML under other extensions.
-      synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{ocl,oclinecore,ecore,xml,henshin_text,henshin}") },
+      synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{ocl,oclinecore,ecore,xml,henshin_text,henshin,qvto,qvtr}") },
       // The package registry is there before the server loads the workspace folders.
       initializationOptions: () => ({ registry: registry.entries() }),
       outputChannel: output,
@@ -114,6 +117,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   });
 
   const pairs = new HenshinPairs(engine, ready.then(() => undefined));
+  const qvt = new QvtRunner(engine, output);
 
   const setContext = (c: ConsoleContext | undefined) => {
     oclConsole.setContext(c);
@@ -143,6 +147,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     { dispose: () => void schemas.dispose() },
     MetamodelDiagramEditor.register(context, engine, ready.then(() => undefined)),
     pairs,
+    qvt,
     RuleDiagramEditor.register(context, engine, pairs, ready.then(() => undefined)),
   );
   creator.track(vscode.window.activeTextEditor);
@@ -505,6 +510,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     transform("steps", undefined, node?.kind === "resource" ? node.resource.uri : undefined),
   );
 
+  // QVT: a model (Explorer, editor, Models view) to transform, or a transformation to run. From
+  // code, the second argument may answer the questions (`QvtRunOptions`); the Explorer passes
+  // the selected files there instead.
+  register("oxychloride.runQvt", async (arg?: vscode.Uri | ModelNode, options?: QvtRunOptions | vscode.Uri[]) => {
+    await ready;
+    const opts = Array.isArray(options) ? {} : (options ?? {});
+    if (arg instanceof vscode.Uri) return qvt.run(QVT_FILES.test(arg.path) ? { transformation: arg } : { model: arg }, opts);
+    if (arg?.kind === "resource") return qvt.run({ model: arg.resource.uri }, opts);
+    const doc = vscode.window.activeTextEditor?.document;
+    if (doc && QVT_FILES.test(doc.uri.path)) return qvt.run({ transformation: doc.uri }, opts);
+    if (doc && MODEL_FILES.test(doc.uri.path)) return qvt.run({ model: doc.uri }, opts);
+    return qvt.run({}, opts);
+  });
+
   register("oxychloride.restartServer", async () => {
     await client?.stop().catch(() => undefined);
     client = undefined;
@@ -523,6 +542,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     diagrams: () => MetamodelDiagramEditor.all(),
     ruleDiagrams: () => RuleDiagramEditor.all(),
     pairs,
+    qvt,
     openTransformation,
     ready,
   };

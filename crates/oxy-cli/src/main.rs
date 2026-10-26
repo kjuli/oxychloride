@@ -66,10 +66,11 @@ struct Inputs {
 #[derive(Subcommand)]
 enum Command {
     /// Parse and check documents: Complete OCL, OCLinEcore metamodels, HUTN models (for
-    /// models, the constraints their objects violate are reported too) and Henshin
-    /// transformations (as text or as `.henshin` files).
+    /// models, the constraints their objects violate are reported too), Henshin
+    /// transformations (as text or as `.henshin` files) and QVT transformations.
     Check {
-        /// Documents (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text`, `.henshin`).
+        /// Documents (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text`, `.henshin`, `.qvto`,
+        /// `.qvtr`).
         #[arg(required = true)]
         documents: Vec<PathBuf>,
         #[command(flatten)]
@@ -164,6 +165,36 @@ enum Command {
         /// a URI for a metamodel file (`http://example.org/shop=shop.ecore`).
         #[arg(long = "map", value_name = "URI=PATH")]
         map: Vec<String>,
+    },
+    /// Run a QVT transformation — Operational Mappings (`.qvto`) or Relations (`.qvtr`) — on
+    /// models, and write the models it produces or changes (the metamodels its model types or
+    /// imports name are given with `-e` or found through `--map`).
+    Qvt {
+        /// The transformation (`.qvto` or `.qvtr`).
+        transformation: PathBuf,
+        /// The model of a parameter: `--in source=model.xmi` (or a `.hutn` document). Without
+        /// it, a single input parameter takes the model given with `-m`.
+        #[arg(long = "in", value_name = "PARAM=FILE")]
+        bind: Vec<String>,
+        /// Where to write the model of an output parameter: `--out target=schema.xmi` (a
+        /// `.hutn` file gets HUTN). Without it, the output models are printed.
+        #[arg(long = "out", value_name = "PARAM=FILE")]
+        out: Vec<String>,
+        /// QVTr: the parameter to run the transformation in the direction of (needed when its
+        /// relations enforce several).
+        #[arg(long)]
+        target: Option<String>,
+        /// QVTr: only check the target model (given with `--in`) against the relations.
+        #[arg(long)]
+        check: bool,
+        /// QVTo: the value of a configuration property, in OCL syntax: `--config prefix="'T_'"`.
+        #[arg(long = "config", value_name = "NAME=VALUE")]
+        config: Vec<String>,
+        /// Print the output models as HUTN (instead of XMI).
+        #[arg(long)]
+        hutn: bool,
+        #[command(flatten)]
+        inputs: Inputs,
     },
     /// Serve the JSON-RPC protocol on stdin/stdout (one JSON message per line).
     Serve,
@@ -506,6 +537,114 @@ fn run(command: Command, format: Format, r: &Renderer) -> Result<bool, String> {
                 );
             }
             Ok(code.problems.is_empty() && !has_errors(&diags))
+        }
+        Command::Qvt { transformation, bind, out, target, check, config, hutn, inputs } => {
+            let opened = load(&mut ws, &inputs, &mut warnings)?;
+            let split = |s: &str, what: &str| -> Result<(String, String), String> {
+                s.split_once('=')
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .ok_or_else(|| format!("invalid {what} '{s}' (expected NAME=VALUE)"))
+            };
+            let mut models = Vec::new();
+            for b in &bind {
+                let (parameter, file) = split(b, "--in")?;
+                let model = if Language::from_path(&file) == Language::Hutn {
+                    open_documents(&mut ws, &[PathBuf::from(&file)])?.remove(0)
+                } else {
+                    let r = ws.load_model_file(&file).map_err(|e| e.to_string())?;
+                    warnings.extend(r.warnings);
+                    r.uri
+                };
+                models.push(oxychloride::QvtModelBinding { parameter, model });
+            }
+            let name = open_documents(&mut ws, std::slice::from_ref(&transformation))?.remove(0);
+            if !Language::from_path(&name).is_qvt() {
+                return Err(format!("{name} is not a QVT transformation (.qvto or .qvtr)"));
+            }
+            let mut diags = warnings;
+            diags.extend(model_problems(&ws, &opened));
+            diags.extend(ws.diagnostics(Some(&name)));
+            let sources = sources(&ws);
+            if has_errors(&diags) {
+                for d in &diags {
+                    eprint!("{}", r.diagnostic(d, sources.get(&d.source).map(String::as_str)));
+                }
+                return Ok(false);
+            }
+            // A single input parameter takes the model given with `-m`.
+            if models.is_empty() {
+                let info = ws.qvt_transformations(None).map_err(|e| e.to_string())?;
+                let mut inputs: Vec<&oxychloride::QvtParameterInfo> = Vec::new();
+                for t in info.iter().filter(|t| t.document == name) {
+                    // QVTr: all but the direction of the run.
+                    let direction = target.clone().or_else(|| (t.targets.len() == 1).then(|| t.targets[0].clone()));
+                    inputs.extend(t.parameters.iter().filter(|p| match p.direction.as_deref() {
+                        Some(d) => d != "out",
+                        None => direction.as_deref() != Some(p.name.as_str()),
+                    }));
+                }
+                let given: Vec<String> = ws.models().into_iter().map(|m| m.uri).collect();
+                if let ([p], [m]) = (inputs.as_slice(), given.as_slice()) {
+                    models.push(oxychloride::QvtModelBinding { parameter: p.name.clone(), model: m.clone() });
+                }
+            }
+            let mut outputs = Vec::new();
+            for o in &out {
+                let (parameter, path) = split(o, "--out")?;
+                let path = std::path::absolute(&path).map_or(path, |p| p.to_string_lossy().into_owned());
+                outputs.push(oxychloride::QvtOutputPath { parameter, path });
+            }
+            let request = oxychloride::QvtRunRequest {
+                document: name.clone(),
+                models,
+                outputs,
+                target,
+                check,
+                format: hutn.then(|| "hutn".to_string()),
+                configuration: config.iter().map(|c| split(c, "--config")).collect::<Result<_, _>>()?,
+            };
+            let result = ws.run_qvt(&request).map_err(|e| e.to_string())?;
+            for o in &result.outputs {
+                if out.iter().any(|x| x.split_once('=').is_some_and(|(p, _)| p == o.parameter)) {
+                    std::fs::write(&o.path, &o.text).map_err(|e| format!("cannot write {}: {e}", o.path))?;
+                }
+            }
+            let ok = result.problems.is_empty() && result.violations.is_empty() && result.aborted.is_none();
+            if format == Format::Json {
+                print_json(&result);
+            } else {
+                for d in diags.iter().chain(&result.problems) {
+                    eprint!("{}", r.diagnostic(d, sources.get(&d.source).map(String::as_str)));
+                }
+                for line in &result.log {
+                    eprintln!("{} {line}", r.dim("log:"));
+                }
+                if let Some(a) = &result.aborted {
+                    eprintln!("{}: {a}", r.error("aborted"));
+                }
+                for v in &result.violations {
+                    eprintln!("{} {v}", r.error("✗"));
+                }
+                for v in &result.invariants {
+                    eprintln!("{}: {v}", r.warning("invariant"));
+                }
+                for o in &result.outputs {
+                    if out.iter().any(|x| x.split_once('=').is_some_and(|(p, _)| p == o.parameter)) {
+                        eprintln!("Wrote {} ({} objects).", o.path, o.objects);
+                    } else {
+                        print!("{}", o.text);
+                    }
+                }
+                let what = if check { "checked" } else { "applied" };
+                eprintln!(
+                    "{} {} {what}, {} objects created{}",
+                    result.applications,
+                    if name.ends_with(".qvtr") { "relations" } else { "mappings" },
+                    result.created,
+                    if check { format!(", {} violations", result.violations.len()) } else { String::new() }
+                );
+            }
+            Ok(ok)
         }
         Command::Lsp { .. } => {
             oxy_lsp::run_stdio().map_err(|e| e.to_string())?;

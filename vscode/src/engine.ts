@@ -677,6 +677,63 @@ export type TransformationEdit =
 /** Parameter values by name: strings, numbers, Booleans, or node ids for node parameters. */
 export type ParameterValues = Record<string, string | number | boolean | null>;
 
+/** A QVT transformation of the workspace (`qvtTransformations`). */
+export interface QvtTransformationInfo {
+  /** The document's name (its path). */
+  document: string;
+  language: "qvto" | "qvtr";
+  name: string;
+  parameters: QvtParameterInfo[];
+  /** QVTo: the `out` and `inout` parameters; QVTr: the parameters relations enforce (the
+   * directions it runs in). */
+  targets: string[];
+  errors: number;
+  /** The parameters the model asked about can be bound to. */
+  applicable?: string[];
+}
+
+export interface QvtParameterInfo {
+  name: string;
+  /** `in`, `out` or `inout` (QVTo); none for QVTr. */
+  direction?: "in" | "out" | "inout";
+  modelType: string;
+  /** The nsURIs of its metamodel's packages. */
+  metamodels: string[];
+}
+
+export interface QvtRunRequest {
+  document: string;
+  /** Models (by engine name: a document's path or a loaded model's URI) of input parameters. */
+  models: { parameter: string; model: string }[];
+  /** Where the models of output parameters will be written. */
+  outputs?: { parameter: string; path: string }[];
+  /** QVTr: the parameter to run in the direction of. */
+  target?: string;
+  /** QVTr: only check the target model. */
+  check?: boolean;
+  format?: "xmi" | "hutn";
+  configuration?: Record<string, string>;
+}
+
+export interface QvtOutput {
+  parameter: string;
+  path: string;
+  format: "xmi" | "hutn";
+  text: string;
+  objects: number;
+}
+
+export interface QvtRunResult {
+  outputs: QvtOutput[];
+  log: string[];
+  problems: Diagnostic[];
+  violations: string[];
+  invariants: string[];
+  applications: number;
+  created: number;
+  aborted?: string;
+}
+
 export class Engine {
   constructor(private readonly client: () => LanguageClient | undefined) {}
 
@@ -750,6 +807,12 @@ export class Engine {
   stateSpaceState = (session: number, state: number) => this.call<StateSpaceStateDetails>("stateSpaceState", { session, state });
   adoptState = (session: number, state: number) => this.call<TransformationState>("adoptState", { session, state });
   closeTransformation = (session: number) => this.call<{ closed: boolean }>("closeTransformation", { session });
+
+  /** The QVT transformations of the workspace; with `model`, which of their parameters it fits. */
+  qvtTransformations = (model?: string) =>
+    this.call<{ transformations: QvtTransformationInfo[] }>("qvtTransformations", model ? { model } : {}).then((r) => r.transformations);
+  /** Runs a QVT transformation on copies of the workspace's models; the outputs come back as text. */
+  runQvt = (request: QvtRunRequest) => this.call<QvtRunResult>("runQvt", request);
 }
 
 export function errorMessage(e: unknown): string {

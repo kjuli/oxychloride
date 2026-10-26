@@ -26,6 +26,8 @@ pub enum Value {
     /// Tuple parts, sorted by name.
     Tuple(Rc<Vec<(Rc<str>, Value)>>),
     Type(Rc<Type>),
+    /// A model parameter of a QVT transformation (by name).
+    Model(Rc<str>),
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +109,7 @@ impl Value {
             }
             Value::Tuple(parts) => Type::tuple(parts.iter().map(|(n, v)| (n.to_string(), v.type_of(model))).collect()),
             Value::Type(t) => Type::Meta(t.clone()),
+            Value::Model(_) => Type::Model(Rc::from("")),
         }
     }
 
@@ -140,6 +143,7 @@ impl Value {
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|((n1, v1), (n2, v2))| n1 == n2 && v1.ocl_equals(v2))
             }
             (Value::Type(a), Value::Type(b)) => a == b,
+            (Value::Model(a), Value::Model(b)) => a == b,
             _ => false,
         }
     }
@@ -171,6 +175,7 @@ impl Value {
             }
             Value::Tuple(parts) => Key::Tuple(parts.iter().map(|(n, v)| (n.clone(), v.key())).collect()),
             Value::Type(t) => Key::Type(format!("{t:?}")),
+            Value::Model(m) => Key::Model(m.clone()),
         }
     }
 
@@ -258,6 +263,9 @@ impl Value {
             Value::Type(t) => {
                 let _ = write!(out, "{}", t.display(mm));
             }
+            Value::Model(m) => {
+                let _ = write!(out, "model {m}");
+            }
         }
     }
 
@@ -289,6 +297,7 @@ pub enum Key {
     Collection(u8, Vec<Key>),
     Tuple(Vec<(Rc<str>, Key)>),
     Type(String),
+    Model(Rc<str>),
 }
 
 /// Removes duplicates, keeping the first occurrence.
@@ -330,6 +339,7 @@ impl fmt::Display for Value {
                 f.write_str("}")
             }
             Value::Type(t) => write!(f, "{t:?}"),
+            Value::Model(m) => write!(f, "model {m}"),
         }
     }
 }

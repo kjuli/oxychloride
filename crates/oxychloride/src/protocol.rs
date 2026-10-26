@@ -46,6 +46,10 @@ pub enum Language {
     /// the same as its textual syntax.
     #[serde(rename = "henshinModel")]
     HenshinModel,
+    /// QVT Operational Mappings (`.qvto`): imperative model-to-model transformations.
+    Qvto,
+    /// QVT Relations (`.qvtr`): declarative model-to-model transformations.
+    Qvtr,
 }
 
 impl Language {
@@ -60,6 +64,11 @@ impl Language {
         matches!(self, Language::Henshin | Language::HenshinModel)
     }
 
+    /// Whether documents of this language are QVT transformations (of either language).
+    pub fn is_qvt(self) -> bool {
+        matches!(self, Language::Qvto | Language::Qvtr)
+    }
+
     /// The language of a document, by its file extension (Complete OCL by default).
     pub fn from_path(name: &str) -> Language {
         let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
@@ -69,6 +78,8 @@ impl Language {
             "xmi" => Language::Xmi,
             "henshin_text" => Language::Henshin,
             "henshin" => Language::HenshinModel,
+            "qvto" => Language::Qvto,
+            "qvtr" => Language::Qvtr,
             _ => Language::Ocl,
         }
     }
@@ -81,6 +92,8 @@ impl Language {
             Language::Xmi => "xmi",
             Language::Henshin => "henshin_text",
             Language::HenshinModel => "henshin",
+            Language::Qvto => "qvto",
+            Language::Qvtr => "qvtr",
         }
     }
 }
@@ -1578,4 +1591,122 @@ pub struct TransformationEditResult {
     /// The id of the added or renamed element.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub element: Option<String>,
+}
+
+// ---------------------------------------------------------------------- QVT
+
+/// A QVT transformation of an open document (`qvtTransformations`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QvtTransformationInfo {
+    /// The document's name.
+    pub document: String,
+    /// `qvto` or `qvtr`.
+    pub language: Language,
+    pub name: String,
+    pub parameters: Vec<QvtParameterInfo>,
+    /// The parameters a run can create or change objects in: QVTo's `out` and `inout`
+    /// parameters, the parameters QVTr relations enforce (the directions it can run in).
+    pub targets: Vec<String>,
+    /// The number of errors of the document (a transformation with errors cannot run).
+    pub errors: usize,
+    /// For `qvtTransformations` with a model: the parameters the model can be bound to (its
+    /// objects are of the parameter's metamodel). Empty without a model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applicable: Vec<String>,
+}
+
+/// A model parameter of a QVT transformation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QvtParameterInfo {
+    pub name: String,
+    /// `in`, `out` or `inout` (QVTo); none for QVTr, whose parameters are inputs or the target
+    /// depending on the direction of a run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    /// The model type (QVTo) or the imported metamodels (QVTr).
+    pub model_type: String,
+    /// The nsURIs of the packages of its metamodel.
+    pub metamodels: Vec<String>,
+}
+
+/// A model bound to a parameter of a QVT transformation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QvtModelBinding {
+    pub parameter: String,
+    /// A model resource of the workspace: the URI of a loaded XMI model, or the name of an
+    /// open model document (HUTN or XMI), as `models` reports them.
+    pub model: String,
+}
+
+/// Where the model of an output parameter is written to (for its references to other
+/// models and its schema locations; the engine does not write files).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QvtOutputPath {
+    pub parameter: String,
+    pub path: String,
+}
+
+/// What `runQvt` runs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct QvtRunRequest {
+    /// The QVT document (open in the workspace).
+    pub document: String,
+    /// The models of the input parameters (QVTo: `in` and `inout`; QVTr: all but the target,
+    /// and the target too when an existing model is to be updated or checked).
+    pub models: Vec<QvtModelBinding>,
+    /// The paths the models of the output parameters will be written to (default:
+    /// `<parameter>.xmi` next to the document).
+    pub outputs: Vec<QvtOutputPath>,
+    /// QVTr: the parameter to run in the direction of (needed when relations enforce more than
+    /// one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// QVTr: only check the target model against the relations.
+    pub check: bool,
+    /// `xmi` (default) or `hutn`: the format of the output models' text (by default, the
+    /// output path's extension decides).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// QVTo: values of configuration properties, in OCL syntax (`'text'`, `3`, `true`).
+    pub configuration: std::collections::BTreeMap<String, String>,
+}
+
+/// A model a QVT transformation produced or changed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QvtOutput {
+    pub parameter: String,
+    pub path: String,
+    /// `xmi` or `hutn`.
+    pub format: String,
+    pub text: String,
+    /// The number of objects in it.
+    pub objects: usize,
+}
+
+/// The outcome of `runQvt`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QvtRunResult {
+    pub outputs: Vec<QvtOutput>,
+    /// The messages of `log` (and of failed assertions).
+    pub log: Vec<String>,
+    /// Problems met while running, located in the transformation.
+    pub problems: Vec<Diagnostic>,
+    /// QVTr in check mode: the bindings of relations that do not hold.
+    pub violations: Vec<String>,
+    /// The invariants the output models violate (`Class::Invariant on Object: message`).
+    pub invariants: Vec<String>,
+    /// How many mappings (QVTo) or relations (QVTr) were applied.
+    pub applications: usize,
+    /// How many objects were created.
+    pub created: usize,
+    /// The message of a fatal assertion that ended the transformation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aborted: Option<String>,
 }

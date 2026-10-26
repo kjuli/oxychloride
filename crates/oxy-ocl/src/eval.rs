@@ -8,9 +8,11 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use oxy_ecore::{Metamodel, Model, ModelValue, ObjectId, OperationId, PackageId, default_value};
+use oxy_ecore::{DataTypeKind, Metamodel, Model, ModelValue, ObjectId, OperationId, PackageId, default_value};
 
-use crate::env::{Body, Environment, lookup_classifier, resolve_type};
+use crate::env::{Body, Environment, PackageAlias, lookup_classifier_in, resolve_type_in};
+use crate::host::{Host, ResolveRequest};
+use crate::span::Span;
 use crate::syntax::ast::*;
 use crate::types::{CollectionKind, Type, library_type};
 use crate::validate::{Status, status_of};
@@ -19,10 +21,69 @@ use crate::value::{Collection, Value};
 /// Maximum nesting of operation/definition calls before evaluation is aborted.
 const MAX_DEPTH: u32 = 256;
 
+/// When less stack than this is left, evaluation continues on a new stack segment...
+pub(crate) const RED_ZONE: usize = 128 * 1024;
+/// ... of this size.
+pub(crate) const STACK_CHUNK: usize = 4 * 1024 * 1024;
+
+/// Most iterations of one loop (`while`, `forEach`) before it is stopped.
+const MAX_ITERATIONS: u64 = 10_000_000;
+
+#[derive(Clone, Debug)]
 struct Frame {
     vars: Vec<(Rc<str>, Value)>,
-    /// The current element of an implicit iterator (or `self` in the outermost frame).
+    /// The current element of an implicit iterator (or `self` in the outermost frame, or the
+    /// object being populated by `object`).
     implicit: Option<Value>,
+    /// Whether operations can be called on `implicit` without a source (not on the object being
+    /// populated: it is the implicit source of properties only, as in Eclipse QVTo).
+    operations: bool,
+    /// The declared types of the variables that have one (`var x : T`).
+    types: Vec<(Rc<str>, Type)>,
+}
+
+/// A transfer of control of Imperative OCL, pending until a block, loop or operation takes it.
+#[derive(Clone, Debug)]
+enum Control {
+    Return(Value),
+    Break,
+    Continue,
+    /// A fatal assertion failed: the transformation ends.
+    Abort(String),
+}
+
+/// The model an evaluator reads (and, for Imperative OCL, changes).
+enum ModelRef<'a> {
+    Shared(&'a Model),
+    Exclusive(&'a mut Model),
+}
+
+impl std::ops::Deref for ModelRef<'_> {
+    type Target = Model;
+
+    fn deref(&self) -> &Model {
+        match self {
+            ModelRef::Shared(m) => m,
+            ModelRef::Exclusive(m) => m,
+        }
+    }
+}
+
+/// An assignment of a `late resolve`, done at the end of a transformation (see
+/// [`Host::defer`] and [`Evaluator::complete_late`]).
+#[derive(Clone, Debug)]
+pub struct LateResolve {
+    /// The object whose property is assigned (`None`: a variable, which cannot be late).
+    pub target: ObjectId,
+    pub property: String,
+    pub add: bool,
+    pub request: ResolveRequest,
+    one: bool,
+    var: Option<Rc<str>>,
+    ty: Option<Type>,
+    condition: Option<Rc<Expr>>,
+    frames: Vec<Frame>,
+    span: Span,
 }
 
 /// A pre- or postcondition evaluated for an operation call.
@@ -51,8 +112,13 @@ pub enum Record {
 
 pub struct Evaluator<'a> {
     mm: &'a Metamodel,
-    model: &'a Model,
+    model: ModelRef<'a>,
     env: &'a Environment,
+    host: Option<&'a dyn Host>,
+    aliases: &'a [PackageAlias],
+    control: Option<Control>,
+    /// Problems of Imperative OCL statements (failed assignments, invalid results).
+    errors: Vec<(Span, String)>,
     frames: Vec<Frame>,
     depth: u32,
     /// Package of the body being evaluated, for resolving unqualified type names.
@@ -74,15 +140,82 @@ macro_rules! strict {
 
 impl<'a> Evaluator<'a> {
     pub fn new(mm: &'a Metamodel, model: &'a Model, env: &'a Environment) -> Self {
+        Evaluator::with_model(mm, ModelRef::Shared(model), env)
+    }
+
+    /// An evaluator that may change the model (for Imperative OCL: assignments, `object`).
+    pub fn new_mut(mm: &'a Metamodel, model: &'a mut Model, env: &'a Environment) -> Self {
+        Evaluator::with_model(mm, ModelRef::Exclusive(model), env)
+    }
+
+    fn with_model(mm: &'a Metamodel, model: ModelRef<'a>, env: &'a Environment) -> Self {
         Evaluator {
             mm,
             model,
             env,
-            frames: vec![Frame { vars: Vec::new(), implicit: None }],
+            host: None,
+            aliases: &[],
+            control: None,
+            errors: Vec::new(),
+            frames: vec![Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() }],
             depth: 0,
             package: None,
             check_contracts: true,
             contract_checks: Vec::new(),
+        }
+    }
+
+    /// Evaluates with the names, operations and expressions of a language built on OCL.
+    pub fn with_host(mut self, host: &'a dyn Host) -> Self {
+        self.host = Some(host);
+        self
+    }
+
+    /// Resolves type names with package aliases (QVT's model types).
+    pub fn with_aliases(mut self, aliases: &'a [PackageAlias]) -> Self {
+        self.aliases = aliases;
+        self
+    }
+
+    pub fn metamodel(&self) -> &'a Metamodel {
+        self.mm
+    }
+
+    pub fn model(&self) -> &Model {
+        &self.model
+    }
+
+    /// The model, if this evaluator may change it ([`Evaluator::new_mut`]).
+    pub fn model_mut(&mut self) -> Option<&mut Model> {
+        match &mut self.model {
+            ModelRef::Exclusive(m) => Some(m),
+            ModelRef::Shared(_) => None,
+        }
+    }
+
+    pub fn environment(&self) -> &'a Environment {
+        self.env
+    }
+
+    /// The problems of Imperative OCL statements since the last call: assignments that failed
+    /// and statements whose value is invalid.
+    pub fn take_errors(&mut self) -> Vec<(Span, String)> {
+        std::mem::take(&mut self.errors)
+    }
+
+    /// Records a problem of a statement.
+    pub fn report(&mut self, span: Span, message: impl Into<String>) {
+        let message = message.into();
+        if !self.errors.iter().any(|(s, m)| *s == span && *m == message) {
+            self.errors.push((span, message));
+        }
+    }
+
+    /// The message of a failed fatal assertion, which ended the evaluation.
+    pub fn aborted(&self) -> Option<&str> {
+        match &self.control {
+            Some(Control::Abort(m)) => Some(m),
+            _ => None,
         }
     }
 
@@ -123,7 +256,7 @@ impl<'a> Evaluator<'a> {
             }
             let body = oc.body.clone();
             let value = self.eval_body(&body, Value::Object(object), &bound);
-            let status = status_of(value, self.mm, self.model);
+            let status = status_of(value, self.mm, &self.model);
             let keep = match record {
                 Record::All => true,
                 Record::Failures => status != Status::Satisfied,
@@ -133,7 +266,7 @@ impl<'a> Evaluator<'a> {
                 let message = match (&status, &oc.message) {
                     (Status::Violated, Some(m)) => {
                         let body = Body { expr: m.clone(), ..oc.body.clone() };
-                        Some(self.eval_body(&body, Value::Object(object), &bound).to_ocl_string(self.mm, self.model))
+                        Some(self.eval_body(&body, Value::Object(object), &bound).to_ocl_string(self.mm, &self.model))
                     }
                     _ => None,
                 };
@@ -170,7 +303,7 @@ impl<'a> Evaluator<'a> {
 
     /// Evaluates `expr` with `self` bound to `self_value` (if any) and additional variables.
     pub fn evaluate(&mut self, expr: &Expr, self_value: Option<Value>, vars: &[(&str, Value)]) -> Value {
-        let mut frame = Frame { vars: Vec::new(), implicit: None };
+        let mut frame = Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() };
         if let Some(s) = self_value {
             frame.vars.push(("self".into(), s.clone()));
             frame.implicit = Some(s);
@@ -197,8 +330,27 @@ impl<'a> Evaluator<'a> {
         v
     }
 
-    fn lookup_var(&self, name: &str) -> Option<Value> {
+    /// The value of a variable in scope.
+    pub fn lookup_var(&self, name: &str) -> Option<Value> {
         self.frames.iter().rev().find_map(|f| f.vars.iter().rev().find(|(n, _)| &**n == name).map(|(_, v)| v.clone()))
+    }
+
+    /// Assigns a variable in scope; `false` if there is none of that name.
+    pub fn set_var(&mut self, name: &str, value: Value) -> bool {
+        for f in self.frames.iter_mut().rev() {
+            if let Some(slot) = f.vars.iter_mut().rev().find(|(n, _)| &**n == name) {
+                slot.1 = value;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Declares a variable in the innermost scope.
+    pub fn declare_var(&mut self, name: &str, value: Value) {
+        if let Some(f) = self.frames.last_mut() {
+            f.vars.push((name.into(), value));
+        }
     }
 
     fn with_frame<T>(&mut self, frame: Frame, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -208,7 +360,81 @@ impl<'a> Evaluator<'a> {
         r
     }
 
+    /// Runs `f` in a fresh scope (like an operation body): `self` bound to `self_value` (and its
+    /// properties usable without `self.`) and the given variables. `None` when calls nest too
+    /// deeply (endless recursion).
+    pub fn call_frame<T>(
+        &mut self,
+        self_value: Option<Value>,
+        vars: &[(&str, Value)],
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> Option<T> {
+        if self.depth >= MAX_DEPTH {
+            return None;
+        }
+        let mut frame = Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() };
+        if let Some(s) = self_value {
+            frame.vars.push(("self".into(), s.clone()));
+            frame.implicit = Some(s);
+        }
+        for (n, v) in vars {
+            frame.vars.push(((*n).into(), v.clone()));
+        }
+        self.depth += 1;
+        let saved = std::mem::replace(&mut self.frames, vec![frame]);
+        let r = f(self);
+        self.frames = saved;
+        self.depth -= 1;
+        Some(r)
+    }
+
+    /// Runs `f` in a nested scope in which the properties of `implicit` can be used without a
+    /// source (as in the body of `object`; its operations need a source).
+    pub fn with_implicit<T>(&mut self, implicit: Value, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.with_frame(Frame { vars: Vec::new(), implicit: Some(implicit), operations: false, types: Vec::new() }, f)
+    }
+
+    /// The value of a `return` that ended the statements evaluated last (and clears it, as
+    /// well as `break` and `continue` outside of loops).
+    pub fn take_return(&mut self) -> Option<Value> {
+        match self.control.take() {
+            Some(Control::Return(v)) => Some(v),
+            Some(abort @ Control::Abort(_)) => {
+                self.control = Some(abort);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Evaluates statements in order (until a `return`, `break` or `continue`); the value is
+    /// the last one's. Invalid values of the others are reported.
+    pub fn eval_statements(&mut self, items: &[Expr]) -> Value {
+        let mut last = Value::Null;
+        for (i, item) in items.iter().enumerate() {
+            last = self.eval(item);
+            if self.control.is_some() {
+                break;
+            }
+            if i + 1 < items.len()
+                && let Value::Invalid(m) = &last
+            {
+                let m = m.to_string();
+                self.report(item.span, m);
+            }
+        }
+        last
+    }
+
     pub fn eval(&mut self, e: &Expr) -> Value {
+        if self.control.is_some() {
+            return Value::Null;
+        }
+        // Recursion (operations, QVT mappings) is bounded by `MAX_DEPTH`, not by the thread's stack.
+        stacker::maybe_grow(RED_ZONE, STACK_CHUNK, || self.eval_kind(e))
+    }
+
+    fn eval_kind(&mut self, e: &Expr) -> Value {
         match &e.kind {
             ExprKind::Bool(b) => Value::Boolean(*b),
             ExprKind::Int(i) => Value::Integer(*i),
@@ -220,11 +446,10 @@ impl<'a> Evaluator<'a> {
             ExprKind::Error => Value::invalid("the expression contains syntax errors"),
             ExprKind::SelfRef => self.lookup_var("self").unwrap_or_else(|| Value::invalid("'self' is not defined")),
             ExprKind::Name { path, .. } => self.name(path),
-            ExprKind::TypeLit(te) => {
-                let mut diags = Vec::new();
-                let t = resolve_type(self.mm, self.package, te, &mut diags);
-                if diags.is_empty() { Value::Type(Rc::new(t)) } else { Value::invalid(diags[0].message.clone()) }
-            }
+            ExprKind::TypeLit(te) => match self.resolve_type(te) {
+                Ok(t) => Value::Type(Rc::new(t)),
+                Err(m) => Value::invalid(m),
+            },
             ExprKind::Property { source, name, safe, .. } => {
                 let src = self.eval(source);
                 if *safe {
@@ -242,6 +467,18 @@ impl<'a> Evaluator<'a> {
             ExprKind::Call { source: Some(source), name, args, arrow, safe, .. } => {
                 let src = self.eval(source);
                 let args: Vec<Value> = args.iter().map(|a| self.eval(a)).collect();
+                // Imperative OCL's mutable lists: `list->add(x)` adds to the variable or property.
+                if name.name == "add"
+                    && *arrow
+                    && let ([arg], Value::Collection(_)) = (args.as_slice(), &src)
+                    && matches!(source.kind, ExprKind::Name { .. } | ExprKind::Property { .. })
+                {
+                    let arg = strict!(arg.clone());
+                    if let Err(m) = self.assign(source, arg, true) {
+                        return Value::invalid(m);
+                    }
+                    return Value::Null;
+                }
                 if *arrow {
                     let items = match to_collection(src) {
                         Ok(c) => c,
@@ -257,13 +494,24 @@ impl<'a> Evaluator<'a> {
             }
             ExprKind::Call { source: None, name, args, .. } => {
                 let args: Vec<Value> = args.iter().map(|a| self.eval(a)).collect();
-                let implicit: Vec<Value> = self.frames.iter().rev().filter_map(|f| f.implicit.clone()).collect();
+                let implicit: Vec<Value> =
+                    self.frames.iter().rev().filter(|f| f.operations).filter_map(|f| f.implicit.clone()).collect();
                 for v in &implicit {
                     if let Value::Object(o) = v
                         && self.has_user_op(*o, &name.name, args.len())
                     {
                         return self.call(v.clone(), &name.name, &args);
                     }
+                    if let Some(h) = self.host
+                        && let Some(r) = h.operation(self, Some(v), &name.name, &args)
+                    {
+                        return r;
+                    }
+                }
+                if let Some(h) = self.host
+                    && let Some(r) = h.operation(self, None, &name.name, &args)
+                {
+                    return r;
                 }
                 // Library operations apply to the innermost implicit source.
                 match implicit.first() {
@@ -292,7 +540,7 @@ impl<'a> Evaluator<'a> {
                 };
                 let acc_name: Rc<str> = accumulator.name.name.as_str().into();
                 for item in items {
-                    let mut frame = Frame { vars: Vec::new(), implicit: None };
+                    let mut frame = Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() };
                     match iterators.first() {
                         Some(v) => frame.vars.push((v.name.name.as_str().into(), item)),
                         None => frame.implicit = Some(item),
@@ -326,7 +574,7 @@ impl<'a> Evaluator<'a> {
                 other => Value::invalid(format!("'if' condition is not a Boolean: {other}")),
             },
             ExprKind::Let { vars, body } => {
-                self.frames.push(Frame { vars: Vec::new(), implicit: None });
+                self.frames.push(Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() });
                 for v in vars {
                     let value = v.init.as_ref().map_or(Value::Null, |i| self.eval(i));
                     self.frames.last_mut().unwrap().vars.push((v.name.name.as_str().into(), value));
@@ -363,6 +611,17 @@ impl<'a> Evaluator<'a> {
                 }
                 Value::tuple(out)
             }
+            _ => self.eval_imperative(e),
+        }
+    }
+
+    /// Resolves a type written in an expression (with the package aliases).
+    pub fn resolve_type(&self, te: &TypeExpr) -> Result<Type, String> {
+        let mut diags = Vec::new();
+        let t = resolve_type_in(self.mm, self.package, self.aliases, te, &mut diags);
+        match diags.into_iter().next() {
+            Some(d) => Err(d.message),
+            None => Ok(t),
         }
     }
 
@@ -375,23 +634,33 @@ impl<'a> Evaluator<'a> {
             if let Some(v) = self.lookup_var(name) {
                 return v;
             }
+            if let Some(h) = self.host
+                && let Some(v) = h.variable(self, name)
+            {
+                return v;
+            }
             let implicit: Vec<Value> = self.frames.iter().rev().filter_map(|f| f.implicit.clone()).collect();
             for v in &implicit {
                 if self.has_property(v, name) {
                     return self.navigate(v, name);
                 }
+                if let Some(h) = self.host
+                    && let Some(r) = h.property(self, v, name)
+                {
+                    return r;
+                }
             }
             if let Some(t) = library_type(name) {
                 return Value::Type(Rc::new(t));
             }
-            if let Ok(c) = lookup_classifier(mm, self.package, &[name]) {
+            if let Ok(c) = lookup_classifier_in(mm, self.package, self.aliases, &[name]) {
                 return Value::Type(Rc::new(Type::of_classifier(mm, c)));
             }
             return Value::invalid(format!("unknown name '{name}'"));
         }
         let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
-        let (last, head) = names.split_last().unwrap();
-        if let Ok(c) = lookup_classifier(mm, self.package, head)
+        let Some((last, head)) = names.split_last() else { return Value::invalid("empty name") };
+        if let Ok(c) = lookup_classifier_in(mm, self.package, self.aliases, head)
             && mm.is_enum(c)
         {
             return match mm.enum_literal_index(c, last) {
@@ -399,7 +668,7 @@ impl<'a> Evaluator<'a> {
                 None => Value::invalid(format!("enumeration '{}' has no literal '{last}'", mm.classifier(c).name)),
             };
         }
-        match lookup_classifier(mm, self.package, &names) {
+        match lookup_classifier_in(mm, self.package, self.aliases, &names) {
             Ok(c) => Value::Type(Rc::new(Type::of_classifier(mm, c))),
             Err(e) => Value::invalid(e),
         }
@@ -435,6 +704,12 @@ impl<'a> Evaluator<'a> {
                 .map(|(_, v)| v.clone())
                 .unwrap_or_else(|| Value::invalid(format!("tuple has no part '{name}'"))),
             Value::Type(t) if name == "name" => Value::string(t.display(self.mm).to_string()),
+            Value::Model(_) => match self.host {
+                Some(h) => {
+                    h.property(self, src, name).unwrap_or_else(|| Value::invalid(format!("unknown property '{name}'")))
+                }
+                None => Value::invalid(format!("unknown property '{name}'")),
+            },
             Value::Collection(c) => {
                 let mut out = Vec::new();
                 for item in &c.items {
@@ -474,12 +749,19 @@ impl<'a> Evaluator<'a> {
             let body = def.body.clone();
             return self.eval_body(&body, Value::Object(o), &[]);
         }
+        if let Some(h) = self.host
+            && let Some(v) = h.property(self, &Value::Object(o), name)
+        {
+            return v;
+        }
         Value::invalid(format!("unknown property '{name}' of class {}", mm.classifier(class).name))
     }
 
     // ---------------------------------------------------------------- calls
 
-    fn call(&mut self, src: Value, name: &str, args: &[Value]) -> Value {
+    /// Calls an operation on a value (`src.name(args)`): a metamodel or `def:` operation, the
+    /// host's, or OCL's.
+    pub fn call(&mut self, src: Value, name: &str, args: &[Value]) -> Value {
         match name {
             "oclIsInvalid" if args.is_empty() => return Value::Boolean(src.is_invalid()),
             "oclIsUndefined" if args.is_empty() => return Value::Boolean(src.is_undefined()),
@@ -493,6 +775,12 @@ impl<'a> Evaluator<'a> {
         }
         if let Value::Object(o) = &src
             && let Some(v) = self.user_op(*o, name, args)
+        {
+            return v;
+        }
+        if !matches!(src, Value::Collection(_))
+            && let Some(h) = self.host
+            && let Some(v) = h.operation(self, Some(&src), name, args)
         {
             return v;
         }
@@ -525,7 +813,7 @@ impl<'a> Evaluator<'a> {
         if src.is_null() {
             return Value::invalid(format!("cannot call '{name}' on null"));
         }
-        Value::invalid(format!("unknown operation '{name}' for {}", src.render(self.mm, self.model)))
+        Value::invalid(format!("unknown operation '{name}' for {}", src.render(self.mm, &self.model)))
     }
 
     fn user_op(&mut self, o: ObjectId, name: &str, args: &[Value]) -> Option<Value> {
@@ -562,7 +850,7 @@ impl<'a> Evaluator<'a> {
 
     fn oclany_op(&mut self, src: &Value, name: &str, args: &[Value]) -> Option<Value> {
         let mm = self.mm;
-        let model = self.model;
+        let model = &*self.model;
         Some(match (name, args) {
             ("oclIsKindOf", [Value::Type(t)]) => Value::Boolean(match src {
                 Value::Null => matches!(**t, Type::OclVoid | Type::OclAny),
@@ -611,7 +899,7 @@ impl<'a> Evaluator<'a> {
     }
 
     /// Whether a runtime value conforms to `t` (exactly, when `exact`).
-    fn conforms(&self, v: &Value, t: &Type, exact: bool) -> bool {
+    pub fn conforms(&self, v: &Value, t: &Type, exact: bool) -> bool {
         let mm = self.mm;
         if !exact && *t == Type::OclAny {
             return !matches!(v, Value::Invalid(_));
@@ -626,7 +914,7 @@ impl<'a> Evaluator<'a> {
                 let kind_ok = if exact { c.kind == *k } else { c.kind == *k || *k == CollectionKind::Collection };
                 kind_ok && (**elem == Type::OclAny || c.items.iter().all(|i| self.conforms(i, elem, false)))
             }
-            _ => v.type_of(self.model) == *t,
+            _ => v.type_of(&self.model) == *t,
         }
     }
 
@@ -868,8 +1156,15 @@ impl<'a> Evaluator<'a> {
             },
             _ => {
                 let src = coll(kind, items);
-                self.oclany_op(&src, name, args)
-                    .unwrap_or_else(|| Value::invalid(format!("unknown collection operation '{name}'")))
+                if let Some(v) = self.oclany_op(&src, name, args) {
+                    return v;
+                }
+                if let Some(h) = self.host
+                    && let Some(v) = h.operation(self, Some(&src), name, args)
+                {
+                    return v;
+                }
+                Value::invalid(format!("unknown collection operation '{name}'"))
             }
         }
     }
@@ -877,7 +1172,7 @@ impl<'a> Evaluator<'a> {
     // ---------------------------------------------------------------- iterators
 
     fn bind_and_eval(&mut self, iterators: &[VarDecl], values: &[Value], body: &Expr) -> Value {
-        let mut frame = Frame { vars: Vec::new(), implicit: None };
+        let mut frame = Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() };
         if iterators.is_empty() {
             frame.implicit = values.first().cloned();
         } else {
@@ -890,6 +1185,37 @@ impl<'a> Evaluator<'a> {
 
     fn iterator(&mut self, items: CollectionItems, name: &str, iterators: &[VarDecl], body: &Expr) -> Value {
         let (kind, items) = items.parts();
+        // `collectselect(i; r = e | cond)`: `r` is collected where `cond` holds.
+        if let [it, target] = iterators
+            && let Some(init) = &target.init
+            && name.starts_with("collectselect")
+        {
+            let mut out = Vec::new();
+            for item in items {
+                let frame = Frame {
+                    vars: vec![(it.name.name.as_str().into(), item)],
+                    implicit: None,
+                    operations: true,
+                    types: Vec::new(),
+                };
+                let (value, keep) = self.with_frame(frame, |ev| {
+                    let value = ev.eval(init);
+                    ev.declare_var(&target.name.name, value.clone());
+                    (value, ev.eval(body))
+                });
+                match keep {
+                    Value::Boolean(true) if !value.is_null() => {
+                        if name == "collectselectOne" {
+                            return value;
+                        }
+                        push_flattened(&mut out, strict!(value));
+                    }
+                    Value::Invalid(m) => return Value::Invalid(m),
+                    _ => {}
+                }
+            }
+            return if name == "collectselectOne" { Value::Null } else { Value::collection(kind.collect_kind(), out) };
+        }
         let one = |ev: &mut Self, item: &Value| ev.bind_and_eval(iterators, std::slice::from_ref(item), body);
         match name {
             "select" | "reject" => {
@@ -1027,6 +1353,43 @@ impl<'a> Evaluator<'a> {
                 let k = if kind.is_ordered() { CollectionKind::OrderedSet } else { CollectionKind::Set };
                 Value::collection(k, result)
             }
+            "xselect" | "selectOne" => {
+                let mut out = Vec::new();
+                for item in items {
+                    let keep = match one(self, &item) {
+                        Value::Boolean(b) => b,
+                        Value::Type(t) => !item.is_null() && self.conforms(&item, &t, false),
+                        Value::Null => false,
+                        Value::Invalid(m) => return Value::Invalid(m),
+                        other => return Value::invalid(format!("{name} body is not a Boolean: {other}")),
+                    };
+                    if keep {
+                        if name == "selectOne" {
+                            return item;
+                        }
+                        out.push(item);
+                    }
+                }
+                if name == "selectOne" { Value::Null } else { Value::collection(kind, out) }
+            }
+            "xcollect" | "collectselect" => {
+                let mut out = Vec::new();
+                for item in &items {
+                    let v = strict!(one(self, item));
+                    push_flattened(&mut out, v);
+                }
+                out.retain(|v| !v.is_null());
+                Value::collection(kind.collect_kind(), out)
+            }
+            "collectOne" | "collectselectOne" => {
+                for item in &items {
+                    let v = strict!(one(self, item));
+                    if !v.is_null() {
+                        return v;
+                    }
+                }
+                Value::Null
+            }
             other => Value::invalid(format!("unknown iterator '{other}'")),
         }
     }
@@ -1072,6 +1435,659 @@ impl<'a> Evaluator<'a> {
                 binary_values(op, &l, &r)
             }
         }
+    }
+}
+
+// ------------------------------------------------------------------ Imperative OCL
+
+impl Evaluator<'_> {
+    /// Imperative OCL and the expressions of QVT Operational Mappings.
+    fn eval_imperative(&mut self, e: &Expr) -> Value {
+        match &e.kind {
+            ExprKind::Block(items) => self
+                .with_frame(Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() }, |ev| {
+                    ev.eval_statements(items)
+                }),
+            // The value is the last variable's (`var a := var b := 1`).
+            ExprKind::VarDecls(vars) => {
+                let mut last = Value::Null;
+                for v in vars {
+                    let value = self.initial_value(v);
+                    if let Value::Invalid(m) = &value {
+                        let m = m.to_string();
+                        self.report(v.span, m);
+                    }
+                    self.declare_var(&v.name.name, value.clone());
+                    if let Some(Ok(t)) = v.ty.as_ref().map(|t| self.resolve_type(t))
+                        && let Some(f) = self.frames.last_mut()
+                    {
+                        f.types.push((v.name.name.as_str().into(), t));
+                    }
+                    // Reported already: not again as the value of a statement.
+                    last = if value.is_invalid() { Value::Null } else { value };
+                }
+                last
+            }
+            ExprKind::Assign { target, value, add } => {
+                if let ExprKind::Resolve { late: true, .. } = &value.kind {
+                    return self.late_assign(e.span, target, value, *add);
+                }
+                let v = self.eval(value);
+                if self.control.is_some() {
+                    return Value::Null;
+                }
+                if let Value::Invalid(m) = &v {
+                    let m = m.to_string();
+                    self.report(e.span, m);
+                    return Value::Null;
+                }
+                match self.assign(target, v.clone(), *add) {
+                    Ok(()) => v,
+                    Err(m) => {
+                        self.report(e.span, m);
+                        Value::Null
+                    }
+                }
+            }
+            ExprKind::While { init, cond, body } => {
+                self.with_frame(Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() }, |ev| {
+                    if let Some(v) = init {
+                        let value = ev.initial_value(v);
+                        ev.declare_var(&v.name.name, value);
+                    }
+                    let mut n = 0u64;
+                    loop {
+                        match ev.eval(cond) {
+                            Value::Boolean(true) => {}
+                            Value::Boolean(false) => break,
+                            other => {
+                                if ev.control.is_none() {
+                                    let m = match other {
+                                        Value::Invalid(m) => m.to_string(),
+                                        other => format!("'while' condition is not a Boolean: {other}"),
+                                    };
+                                    ev.report(cond.span, m);
+                                }
+                                break;
+                            }
+                        }
+                        ev.eval(body);
+                        if !ev.loop_continues() {
+                            break;
+                        }
+                        n += 1;
+                        if n >= MAX_ITERATIONS {
+                            ev.report(e.span, "the loop was stopped after too many iterations");
+                            break;
+                        }
+                    }
+                    // With a declaration, the value is the variable's.
+                    init.as_ref().and_then(|v| ev.lookup_var(&v.name.name)).unwrap_or(Value::Null)
+                })
+            }
+            ExprKind::ForEach { source, iterators, condition, body, one } => {
+                let items = match to_collection(self.eval(source)) {
+                    Ok(c) => c,
+                    Err(Value::Invalid(m)) => {
+                        let m = m.to_string();
+                        self.report(source.span, m);
+                        return Value::Null;
+                    }
+                    Err(_) => return Value::Null,
+                };
+                for item in items {
+                    let mut frame = Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() };
+                    match iterators.first() {
+                        Some(v) => frame.vars.push((v.name.name.as_str().into(), item)),
+                        None => frame.implicit = Some(item),
+                    }
+                    let mut ran = false;
+                    let go_on = self.with_frame(frame, |ev| {
+                        if let Some(c) = condition {
+                            match ev.eval(c) {
+                                Value::Boolean(true) => {}
+                                Value::Invalid(m) => {
+                                    let m = m.to_string();
+                                    ev.report(c.span, m);
+                                    return true;
+                                }
+                                _ => return true,
+                            }
+                        }
+                        ran = true;
+                        ev.eval(body);
+                        ev.loop_continues()
+                    });
+                    if !go_on || (*one && ran) {
+                        break;
+                    }
+                }
+                Value::Null
+            }
+            ExprKind::Switch { cases, default } => {
+                for (c, b) in cases {
+                    match self.eval(c) {
+                        Value::Boolean(true) => return self.eval(b),
+                        Value::Boolean(false) | Value::Null => {}
+                        Value::Invalid(m) => return Value::Invalid(m),
+                        other => return Value::invalid(format!("condition is not a Boolean: {other}")),
+                    }
+                }
+                match default {
+                    Some(d) => self.eval(d),
+                    None => Value::Null,
+                }
+            }
+            ExprKind::Return(value) => {
+                let v = value.as_ref().map_or(Value::Null, |v| self.eval(v));
+                if self.control.is_none() {
+                    self.control = Some(Control::Return(v));
+                }
+                Value::Null
+            }
+            ExprKind::Break => {
+                self.control = Some(Control::Break);
+                Value::Null
+            }
+            ExprKind::Continue => {
+                self.control = Some(Control::Continue);
+                Value::Null
+            }
+            ExprKind::Compute { var, body } => {
+                self.with_frame(Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() }, |ev| {
+                    let value = ev.initial_value(var);
+                    ev.declare_var(&var.name.name, value);
+                    ev.eval(body);
+                    ev.lookup_var(&var.name.name).unwrap_or(Value::Null)
+                })
+            }
+            ExprKind::Log { args, when } => {
+                if let Some(w) = when
+                    && !matches!(self.eval(w), Value::Boolean(true))
+                {
+                    return Value::Null;
+                }
+                let message = self.log_message(args);
+                if let Some(h) = self.host {
+                    h.log(self, message);
+                }
+                Value::Null
+            }
+            ExprKind::Assert { severity, condition, log } => {
+                let holds = self.eval(condition);
+                if matches!(holds, Value::Boolean(true)) {
+                    return Value::Null;
+                }
+                let level = severity.as_ref().map_or("error", |s| s.name.as_str());
+                let detail = match (&holds, log.as_deref()) {
+                    (_, Some(Expr { kind: ExprKind::Log { args, .. }, .. })) => self.log_message(args),
+                    (Value::Invalid(m), None) => m.to_string(),
+                    _ => format!("'{}' does not hold", condition_text(condition)),
+                };
+                let message = format!("assertion failed ({level}): {detail}");
+                if level == "fatal" {
+                    self.control = Some(Control::Abort(message));
+                } else if let Some(h) = self.host {
+                    h.log(self, message.clone());
+                    self.report(e.span, message);
+                } else {
+                    self.report(e.span, message);
+                }
+                Value::Null
+            }
+            ExprKind::Object { var, ty, extent, body } => {
+                let existing = var.as_ref().and_then(|v| self.lookup_var(&v.name));
+                let object = match (&existing, ty) {
+                    (Some(Value::Object(o)), _) => *o,
+                    (_, Some(te)) => match self.create(te, extent.as_ref()) {
+                        Ok(o) => o,
+                        Err(m) => return Value::invalid(m),
+                    },
+                    // `object x : { … }` with `x` null: an object of `x`'s declared type.
+                    _ => match var.as_ref().and_then(|v| self.declared_type(&v.name)) {
+                        Some(Type::Classifier(c)) => match self.create_of(c, extent.as_ref()) {
+                            Ok(o) => o,
+                            Err(m) => return Value::invalid(m),
+                        },
+                        _ => return Value::invalid("the type of the object is not known"),
+                    },
+                };
+                if let Some(v) = var
+                    && !matches!(existing, Some(Value::Object(o)) if o == object)
+                    && !self.set_var(&v.name, Value::Object(object))
+                {
+                    self.declare_var(&v.name, Value::Object(object));
+                }
+                self.with_implicit(Value::Object(object), |ev| ev.eval_statements(body));
+                Value::Object(object)
+            }
+            ExprKind::New { ty, extent, .. } => match self.create(ty, extent.as_ref()) {
+                Ok(o) => Value::Object(o),
+                Err(m) => Value::invalid(m),
+            },
+            ExprKind::MapCall { source, strict, name, args, arrow } => {
+                let src = source.as_ref().map(|s| self.eval(s));
+                let mut values = Vec::new();
+                for a in args {
+                    values.push(strict!(self.eval(a)));
+                }
+                let Some(h) = self.host else {
+                    return Value::invalid("mappings can only be called in transformations");
+                };
+                match src {
+                    None => h.map(self, None, *strict, name, values),
+                    Some(Value::Invalid(m)) => Value::Invalid(m),
+                    Some(Value::Collection(c)) => {
+                        let mut out = Vec::new();
+                        for item in c.items.iter().filter(|i| !i.is_null()) {
+                            match h.map(self, Some(item.clone()), *strict, name, values.clone()) {
+                                Value::Null => {}
+                                Value::Invalid(m) => return Value::Invalid(m),
+                                v => out.push(v),
+                            }
+                        }
+                        Value::collection(c.kind.collect_kind(), out)
+                    }
+                    Some(Value::Null) if *arrow => Value::collection(CollectionKind::Sequence, Vec::new()),
+                    Some(Value::Null) => Value::Null,
+                    Some(v) if *arrow => match h.map(self, Some(v), *strict, name, values) {
+                        Value::Null => Value::collection(CollectionKind::Sequence, Vec::new()),
+                        Value::Invalid(m) => Value::Invalid(m),
+                        r => Value::collection(CollectionKind::Sequence, vec![r]),
+                    },
+                    Some(v) => h.map(self, Some(v), *strict, name, values),
+                }
+            }
+            ExprKind::Resolve { source, one, inverse, mapping, var, ty, condition, .. } => {
+                let src = match source {
+                    Some(s) => Some(strict!(self.eval(s))),
+                    None => None,
+                };
+                let ty = match ty.as_ref().map(|t| self.resolve_type(t)) {
+                    Some(Err(m)) => return Value::invalid(m),
+                    Some(Ok(t)) => Some(t),
+                    None => None,
+                };
+                let request = ResolveRequest {
+                    source: src,
+                    inverse: *inverse,
+                    mapping: mapping.as_ref().map(|m| m.iter().map(|i| i.name.clone()).collect()),
+                };
+                let var = var.as_ref().map(|v| Rc::from(v.name.as_str()));
+                self.resolve_values(&request, *one, var.as_ref(), ty.as_ref(), condition.as_deref())
+            }
+            _ => Value::invalid("unsupported expression"),
+        }
+    }
+
+    /// After the body of a loop: whether to go on (takes a `break` or `continue`).
+    fn loop_continues(&mut self) -> bool {
+        match self.control {
+            Some(Control::Break) => {
+                self.control = None;
+                false
+            }
+            Some(Control::Continue) => {
+                self.control = None;
+                true
+            }
+            Some(_) => false,
+            None => true,
+        }
+    }
+
+    /// The initial value of a declared variable: its initializer, else an empty collection for
+    /// collection types, else null.
+    fn initial_value(&mut self, v: &VarDecl) -> Value {
+        if let Some(i) = &v.init {
+            return self.eval(i);
+        }
+        match v.ty.as_ref().map(|t| self.resolve_type(t)) {
+            Some(Ok(Type::Collection(k, _))) => Value::collection(k, Vec::new()),
+            _ => Value::Null,
+        }
+    }
+
+    fn log_message(&mut self, args: &[Expr]) -> String {
+        let mut parts = Vec::new();
+        for (i, a) in args.iter().enumerate() {
+            let v = self.eval(a);
+            let text = match (i, &v) {
+                (0, _) => v.to_ocl_string(self.mm, &self.model),
+                (1, _) => v.render(self.mm, &self.model),
+                _ => continue,
+            };
+            parts.push(text);
+        }
+        parts.join(": ")
+    }
+
+    /// The declared type of a variable in scope (`var x : T`), if it has one.
+    fn declared_type(&self, name: &str) -> Option<Type> {
+        self.frames.iter().rev().find_map(|f| f.types.iter().rev().find(|(n, _)| &**n == name).map(|(_, t)| t.clone()))
+    }
+
+    /// Creates an object of the class `te` names (through the host).
+    fn create(&mut self, te: &TypeExpr, extent: Option<&Ident>) -> Result<ObjectId, String> {
+        match self.resolve_type(te)? {
+            Type::Classifier(c) if self.mm.is_class(c) => self.create_of(c, extent),
+            other => Err(format!("cannot create an object of type {}", other.display(self.mm))),
+        }
+    }
+
+    /// Creates an object of a class (through the host).
+    fn create_of(&mut self, class: oxy_ecore::ClassifierId, extent: Option<&Ident>) -> Result<ObjectId, String> {
+        if self.mm.class_data(class).is_some_and(|d| d.is_abstract || d.is_interface) {
+            return Err(format!("{} is abstract: its objects cannot be created", self.mm.classifier(class).name));
+        }
+        let Some(h) = self.host else { return Err("objects can only be created in transformations".into()) };
+        h.create(self, class, extent.map(|x| x.name.as_str()))
+    }
+
+    /// Assigns (`add`: adds) a value to a variable or property.
+    fn assign(&mut self, target: &Expr, value: Value, add: bool) -> Result<(), String> {
+        match &target.kind {
+            ExprKind::Name { path, .. } if path.len() == 1 => {
+                let name = path[0].name.as_str();
+                if let Some(current) = self.lookup_var(name) {
+                    let new = if add { added(current, value) } else { value };
+                    self.set_var(name, new);
+                    return Ok(());
+                }
+                if let Some(h) = self.host
+                    && let Some(current) = h.variable(self, name)
+                {
+                    let new = if add { added(current, value) } else { value };
+                    if h.assign_variable(self, name, new) {
+                        return Ok(());
+                    }
+                    return Err(format!("'{name}' cannot be assigned"));
+                }
+                let implicit: Vec<Value> = self.frames.iter().rev().filter_map(|f| f.implicit.clone()).collect();
+                for v in &implicit {
+                    if self.has_property(v, name) || self.host.is_some_and(|h| h.property(self, v, name).is_some()) {
+                        return self.assign_property(v, name, value, add);
+                    }
+                }
+                Err(format!("unknown variable or property '{name}'"))
+            }
+            ExprKind::Property { source, name, .. } => match self.eval(source) {
+                Value::Invalid(m) => Err(m.to_string()),
+                Value::Null => Err(format!("cannot assign '{}' of null", name.name)),
+                src => self.assign_property(&src, &name.name, value, add),
+            },
+            _ => Err("only variables and properties can be assigned".into()),
+        }
+    }
+
+    /// Assigns (`add`: adds) a value to a property of an object (or a property the host
+    /// defines), as EMF does: containment and opposites stay consistent.
+    pub fn assign_property(&mut self, target: &Value, name: &str, value: Value, add: bool) -> Result<(), String> {
+        let mm = self.mm;
+        let feature = match target {
+            Value::Object(o) => mm.lookup_feature(self.model.class_of(*o), name),
+            _ => None,
+        };
+        let (Value::Object(o), Some(f)) = (target, feature) else {
+            if let Some(h) = self.host
+                && let Some(r) = h.assign_property(self, target, name, value, add)
+            {
+                return r;
+            }
+            return Err(match target {
+                Value::Object(o) => {
+                    format!("unknown property '{name}' of class {}", mm.classifier(self.model.class_of(*o)).name)
+                }
+                other => format!("cannot assign property '{name}' of {other}"),
+            });
+        };
+        let o = *o;
+        if let Some(h) = self.host {
+            h.writable(self, o)?;
+        }
+        let feat = mm.feature(f);
+        if feat.derived {
+            return Err(format!("'{name}' is derived: it cannot be assigned"));
+        }
+        let values: Vec<ModelValue> = match &value {
+            Value::Invalid(m) => return Err(m.to_string()),
+            Value::Null => Vec::new(),
+            Value::Collection(c) => {
+                c.items.iter().filter(|v| !v.is_null()).map(|v| self.to_model_value(f, v)).collect::<Result<_, _>>()?
+            }
+            v => vec![self.to_model_value(f, v)?],
+        };
+        if !feat.is_many() && values.len() > 1 {
+            return Err(format!("cannot assign {} values to the single-valued property '{name}'", values.len()));
+        }
+        let Some(model) = self.model_mut() else { return Err("the model cannot be changed here".into()) };
+        if feat.is_many() {
+            if add {
+                for v in values {
+                    model.insert(mm, o, f, v);
+                }
+            } else {
+                model.set(mm, o, f, values);
+            }
+        } else {
+            match values.into_iter().next() {
+                Some(v) => model.insert(mm, o, f, v),
+                None => model.clear(mm, o, f),
+            }
+        }
+        Ok(())
+    }
+
+    /// The value a feature stores for an OCL value.
+    fn to_model_value(&self, feature: oxy_ecore::FeatureId, v: &Value) -> Result<ModelValue, String> {
+        let mm = self.mm;
+        let f = mm.feature(feature);
+        let kind = f.ty.and_then(|t| mm.data_type_kind(t));
+        let mismatch = || {
+            let ty = f.ty.map_or("?".to_string(), |t| mm.classifier(t).name.clone());
+            format!("{} does not fit the property '{}' of type {ty}", v.render(mm, &self.model), f.name)
+        };
+        Ok(match v {
+            Value::Object(o) if f.is_reference() => {
+                if f.ty.is_some_and(|t| !mm.conforms_to(self.model.class_of(*o), t)) {
+                    return Err(mismatch());
+                }
+                ModelValue::Object(*o)
+            }
+            Value::Enum(e, l) if f.ty == Some(*e) => ModelValue::Enum(*e, *l as usize),
+            Value::Boolean(b) if kind == Some(DataTypeKind::Boolean) => ModelValue::Boolean(*b),
+            Value::Integer(i) if kind == Some(DataTypeKind::Real) => ModelValue::Real(*i as f64),
+            Value::Integer(i) if kind == Some(DataTypeKind::Integer) => ModelValue::Integer(*i),
+            Value::Unlimited if kind == Some(DataTypeKind::Integer) => ModelValue::Integer(-1),
+            Value::Real(r) if kind == Some(DataTypeKind::Real) => ModelValue::Real(*r),
+            Value::Real(r) if kind == Some(DataTypeKind::Integer) && r.fract() == 0.0 => ModelValue::Integer(*r as i64),
+            Value::String(s) if matches!(kind, Some(DataTypeKind::String | DataTypeKind::Other)) => {
+                ModelValue::String(s.to_string())
+            }
+            Value::Boolean(b) if kind == Some(DataTypeKind::Other) => ModelValue::String(b.to_string()),
+            Value::Integer(i) if kind == Some(DataTypeKind::Other) => ModelValue::String(i.to_string()),
+            _ => return Err(mismatch()),
+        })
+    }
+
+    /// `target := late resolve...`: remembered by the host until the end of the
+    /// transformation (or resolved now if it cannot).
+    fn late_assign(&mut self, span: Span, target: &Expr, value: &Expr, add: bool) -> Value {
+        let ExprKind::Resolve { source, one, inverse, mapping, var, ty, condition, .. } = &value.kind else {
+            return Value::Null;
+        };
+        let (object, property) = match &target.kind {
+            ExprKind::Property { source, name, .. } => match self.eval(source) {
+                Value::Object(o) => (o, name.name.clone()),
+                other => {
+                    self.report(
+                        span,
+                        format!("a late resolve must be assigned to a property of an object, not of {other}"),
+                    );
+                    return Value::Null;
+                }
+            },
+            ExprKind::Name { path, .. } if path.len() == 1 && self.lookup_var(&path[0].name).is_none() => {
+                let name = path[0].name.as_str();
+                let implicit: Vec<Value> = self.frames.iter().rev().filter_map(|f| f.implicit.clone()).collect();
+                match implicit.into_iter().find(|v| self.has_property(v, name)) {
+                    Some(Value::Object(o)) => (o, name.to_string()),
+                    _ => {
+                        self.report(span, format!("unknown property '{name}'"));
+                        return Value::Null;
+                    }
+                }
+            }
+            _ => {
+                self.report(span, "a late resolve must be assigned to a property");
+                return Value::Null;
+            }
+        };
+        let src = match source {
+            Some(s) => match self.eval(s) {
+                Value::Invalid(m) => {
+                    self.report(span, m.to_string());
+                    return Value::Null;
+                }
+                v => Some(v),
+            },
+            None => None,
+        };
+        let ty = match ty.as_ref().map(|t| self.resolve_type(t)) {
+            Some(Err(m)) => {
+                self.report(span, m);
+                return Value::Null;
+            }
+            Some(Ok(t)) => Some(t),
+            None => None,
+        };
+        let late = LateResolve {
+            target: object,
+            property,
+            add,
+            request: ResolveRequest {
+                source: src,
+                inverse: *inverse,
+                mapping: mapping.as_ref().map(|m| m.iter().map(|i| i.name.clone()).collect()),
+            },
+            one: *one,
+            var: var.as_ref().map(|v| Rc::from(v.name.as_str())),
+            ty,
+            condition: condition.as_ref().map(|c| Rc::new((**c).clone())),
+            frames: self.frames.clone(),
+            span,
+        };
+        let deferred = match self.host {
+            Some(h) => h.defer(self, late.clone()),
+            None => false,
+        };
+        if !deferred {
+            self.complete_late(late);
+        }
+        Value::Null
+    }
+
+    /// Does the assignment of a `late resolve` (at the end of a transformation).
+    pub fn complete_late(&mut self, late: LateResolve) {
+        let saved = std::mem::replace(&mut self.frames, late.frames.clone());
+        let value = self.resolve_values(
+            &late.request,
+            late.one,
+            late.var.as_ref(),
+            late.ty.as_ref(),
+            late.condition.as_deref(),
+        );
+        self.frames = saved;
+        let result = match value {
+            Value::Invalid(m) => Err(m.to_string()),
+            v => self.assign_property(&Value::Object(late.target), &late.property, v, late.add),
+        };
+        if let Err(m) = result {
+            self.report(late.span, m);
+        }
+    }
+
+    /// The objects a resolve yields: those the host offers for each source object, of the
+    /// type and satisfying the condition (`one`: the first).
+    fn resolve_values(
+        &mut self,
+        request: &ResolveRequest,
+        one: bool,
+        var: Option<&Rc<str>>,
+        ty: Option<&Type>,
+        condition: Option<&Expr>,
+    ) -> Value {
+        if let Some(Value::Collection(c)) = &request.source {
+            let mut out = Vec::new();
+            for item in c.items.iter().filter(|i| !i.is_null()) {
+                let r = ResolveRequest { source: Some(item.clone()), ..request.clone() };
+                match self.resolve_values(&r, one, var, ty, condition) {
+                    Value::Invalid(m) => return Value::Invalid(m),
+                    Value::Null => {}
+                    v => push_flattened(&mut out, v),
+                }
+            }
+            return Value::collection(CollectionKind::Sequence, out);
+        }
+        if matches!(request.source, Some(Value::Null)) {
+            return if one { Value::Null } else { Value::collection(CollectionKind::Sequence, Vec::new()) };
+        }
+        let Some(h) = self.host else { return Value::invalid("resolve can only be used in transformations") };
+        let candidates = h.resolve(self, request);
+        let mut out = Vec::new();
+        for c in candidates {
+            if let Some(t) = ty
+                && !self.conforms(&c, t, false)
+            {
+                continue;
+            }
+            if let Some(cond) = condition {
+                let mut frame = Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() };
+                match var {
+                    Some(v) => frame.vars.push((v.clone(), c.clone())),
+                    None => frame.implicit = Some(c.clone()),
+                }
+                match self.with_frame(frame, |ev| ev.eval(cond)) {
+                    Value::Boolean(true) => {}
+                    Value::Invalid(m) => return Value::Invalid(m),
+                    _ => continue,
+                }
+            }
+            if one {
+                return c;
+            }
+            out.push(c);
+        }
+        if one { Value::Null } else { Value::collection(CollectionKind::Sequence, out) }
+    }
+}
+
+/// `current += value` for variables: collections get the value (or its elements) added,
+/// strings it appended; other values are replaced.
+fn added(current: Value, value: Value) -> Value {
+    match (current, value) {
+        (Value::Collection(c), Value::Collection(more)) => {
+            let mut items = c.items.clone();
+            items.extend(more.items.iter().cloned());
+            Value::collection(c.kind, items)
+        }
+        (Value::Collection(c), v) => {
+            let mut items = c.items.clone();
+            if !v.is_null() {
+                items.push(v);
+            }
+            Value::collection(c.kind, items)
+        }
+        (Value::String(a), Value::String(b)) => Value::string(format!("{a}{b}")),
+        (_, v) => v,
+    }
+}
+
+/// A short text for an expression in messages.
+fn condition_text(e: &Expr) -> String {
+    match &e.kind {
+        ExprKind::Name { path, .. } => path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join("::"),
+        _ => "the condition".to_string(),
     }
 }
 

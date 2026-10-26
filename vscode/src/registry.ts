@@ -266,6 +266,8 @@ export class PackageRegistry implements vscode.TreeDataProvider<RegistryNode>, v
 
   static readonly fixable = [
     /cannot find imported metamodel '([^']+)'/,
+    // QVT model types and imports.
+    /cannot find the metamodel '([^']+)'/,
     /unknown package nsURI '([^']+)'/,
     /no metamodel with nsURI '([^']+)'/,
     /cannot resolve reference '([a-z][\w+.-]*:[^'#]*)#/i,

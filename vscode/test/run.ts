@@ -1,5 +1,5 @@
 // Runs the integration tests in a VS Code instance with the extension under development, on a
-// copy of examples/university (the tests edit and create files).
+// copy of examples/university, examples/library and examples/qvt (the tests edit and create files).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   const extensionDevelopmentPath = path.resolve(__dirname, "../..");
   const extensionTestsPath = path.resolve(__dirname, "suite/index.js");
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "oxychloride-test-"));
-  for (const example of ["university", "library"]) {
+  for (const example of ["university", "library", "qvt"]) {
     fs.cpSync(path.resolve(extensionDevelopmentPath, "../examples", example), path.join(workspace, example), { recursive: true });
   }
   // OXYCHLORIDE_SERVER: run another language server executable (e.g. a logging wrapper).

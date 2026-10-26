@@ -1,14 +1,15 @@
-//! A language server (LSP over stdio) for Complete OCL, OCLinEcore, HUTN, XMI and Henshin
+//! A language server (LSP over stdio) for Complete OCL, OCLinEcore, HUTN, XMI, Henshin and QVT
 //! documents.
 //!
 //! The server keeps an [`rpc::Server`] — the one behind `oxy serve` and the C ABI — and maps
 //! the standard LSP features onto its workspace:
 //!
 //! * documents open in the editor are workspace documents, named by their path (or, if unsaved,
-//!   their URI); the language comes from the editor's language id. The OCLinEcore, Complete OCL
-//!   and Henshin files (texts and `.henshin` models) of the workspace folders are loaded as well
-//!   (from disk while they are not open), so models find their metamodels and constraints, and
-//!   transformations their rules, without opening them. A changed `.ecore`
+//!   their URI); the language comes from the editor's language id. The OCLinEcore, Complete OCL,
+//!   Henshin (texts and `.henshin` models) and QVT (`.qvto`, `.qvtr`) files of the workspace
+//!   folders are loaded as well (from disk while they are not open), so models find their
+//!   metamodels and constraints, transformations their rules, and models the QVT
+//!   transformations they fit (`qvtTransformations`), without opening them. A changed `.ecore`
 //!   file that is loaded (or registered) reloads the metamodels. The package registry
 //!   (`setRegistry`) can be given as `initializationOptions.registry`, so that it is there
 //!   before the workspace folders are loaded;
@@ -142,6 +143,8 @@ fn language_of(path: &str) -> Option<Language> {
         "xmi" => Some(Language::Xmi),
         "henshin_text" => Some(Language::Henshin),
         "henshin" => Some(Language::HenshinModel),
+        "qvto" => Some(Language::Qvto),
+        "qvtr" => Some(Language::Qvtr),
         _ => None,
     }
 }
@@ -153,6 +156,8 @@ fn editor_language(name: &str, language_id: &str) -> Option<Language> {
         "oclinecore" => Some(Language::OclInEcore),
         "hutn" => Some(Language::Hutn),
         "henshin" => Some(Language::Henshin),
+        "qvto" => Some(Language::Qvto),
+        "qvtr" => Some(Language::Qvtr),
         // Of all XML documents, `.xmi` files are models and `.henshin` files transformations.
         _ => language_of(name),
     }
@@ -166,7 +171,15 @@ pub fn document_name(uri: &str) -> String {
 
 /// Whether files of a language are loaded from the workspace folders even when not open.
 fn is_indexed(language: Language) -> bool {
-    matches!(language, Language::Ocl | Language::OclInEcore | Language::Henshin | Language::HenshinModel)
+    matches!(
+        language,
+        Language::Ocl
+            | Language::OclInEcore
+            | Language::Henshin
+            | Language::HenshinModel
+            | Language::Qvto
+            | Language::Qvtr
+    )
 }
 
 struct LspServer {

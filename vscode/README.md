@@ -4,13 +4,14 @@ OCL for Ecore models in VS Code: write metamodels in **OCLinEcore** or **Ecore**
 as a diagram, models in **HUTN** or **XMI**, and see every OCL constraint they violate as you
 type; transform models with **Henshin** rules — as text or as rule diagrams in Henshin's notation, in
 Henshin's textual syntax or as the `.henshin` files of Henshin's editors, kept equivalent — step by
-step or by exploring their state space.
+step or by exploring their state space, or into other models with **QVT** (Operational Mappings and
+Relations), run from a model's context menu.
 Built on the Oxychloride engine (a Rust re-implementation of Eclipse OCL), the same engine as
 the `oxy` CLI.
 
 ## Features
 
-- **Languages:** Complete OCL (`.ocl`), OCLinEcore (`.oclinecore`) and HUTN (`.hutn`) with
+- **Languages:** Complete OCL (`.ocl`), OCLinEcore (`.oclinecore`) and HUTN (`.hutn`) (and QVT, below) with
   highlighting, bracket handling, comments, hover (types of OCL expressions, classes and
   features) and completion that proposes what the metamodel allows (features, operations,
   iterators, types, enumeration literals, nested classes, objects to refer to).
@@ -135,7 +136,20 @@ the `oxy` CLI.
   **Create Equivalent .henshin / Henshin Text** writes the other one. `.henshin` files have
   problems, hovers, the transformation view and state space exploration like texts. See
   [docs/HENSHIN.md](../docs/HENSHIN.md).
-- **File icons** for `.ocl`, `.oclinecore`, `.hutn` and `.henshin_text` files (in file icon themes that show
+- **QVT transformations:** QVT Operational Mappings (`.qvto`) and QVT Relations (`.qvtr`), as
+  Eclipse QVTo and QVTd write them, with highlighting, problems as you type (unknown names,
+  types, wrong arguments, model types whose metamodels cannot be found — with a quick fix to
+  register a file for the URI), hovers (signatures, the types of expressions) and completion
+  (after `.`, `->`, `::` and `map`; variables, features of `self`, mappings, keywords). Model
+  types and imports find metamodels by nsURI, through the package registry, or as files next
+  to the transformation. **Run QVT Transformation…** — on a model (`.xmi`, `.hutn`: Explorer,
+  editor, the Models view) it offers the transformations of the workspace that take models of
+  its metamodel; on a transformation (Explorer, editor title ▷) it asks for the models of its
+  parameters. For QVT Relations it asks for the direction, and whether to create (enforce) the
+  target model or only check an existing one. The results are written as XMI (or HUTN, for a
+  `.hutn` file name) next to the model and opened; the log goes to the *Oxychloride* output, and
+  problems of the run show on the transformation's lines. See [docs/QVT.md](../docs/QVT.md).
+- **File icons** for `.ocl`, `.oclinecore`, `.hutn`, `.henshin_text`, `.qvto` and `.qvtr` files (in file icon themes that show
   language icons, such as the default Seti).
 
 ## Getting started
@@ -147,7 +161,8 @@ console and evaluate `Student.allInstances()->select(semester > 2)`. Open
 `university.henshin_text` and press ▷ (**Open Transformation**) to enrol students step by
 step, or open `university.henshin` to see the same rules as diagrams (editing either changes
 both); in `examples/philosophers`, **Explore State Space** finds the deadlock of the dining
-philosophers.
+philosophers. In `examples/qvt`, right-click `company.hutn` and choose **Run QVT Transformation…**:
+`uml2rdbms` (QVT Operational or QVT Relations) turns the class diagram into a relational schema.
 
 ## Settings
 

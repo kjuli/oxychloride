@@ -1,0 +1,267 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "QVT Operational Mappings",
+  "scopeName": "source.qvto",
+  "fileTypes": [
+    "qvto"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#modeltype"
+    },
+    {
+      "include": "#transformation"
+    },
+    {
+      "include": "#operation"
+    },
+    {
+      "include": "#main"
+    },
+    {
+      "include": "#property"
+    },
+    {
+      "include": "#mapping-call"
+    },
+    {
+      "include": "#resolve-call"
+    },
+    {
+      "include": "#imperative-iterators"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#assignment"
+    },
+    {
+      "include": "#typed-name"
+    },
+    {
+      "include": "source.ocl#expression"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "include": "source.ocl#comments"
+        },
+        {
+          "name": "comment.line.double-slash.qvt",
+          "match": "(//).*$",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.qvt"
+            }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "include": "source.ocl#strings"
+        },
+        {
+          "name": "string.quoted.double.qvt",
+          "begin": "\"",
+          "end": "\"|$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.qvt"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.qvt"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\(?:[ntrbf'\\\"\\\\]|u[0-9A-Fa-f]{4})",
+              "name": "constant.character.escape.qvt"
+            }
+          ]
+        }
+      ]
+    },
+    "assignment": {
+      "match": ":=|\\+=|!=|\\+\\+",
+      "name": "keyword.operator.assignment.qvt"
+    },
+    "typed-name": {
+      "comment": "name : Type (variables, parameters, templates): the type is a (qualified) type name.",
+      "match": "\\b((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))\\s*(:)(?![:=])\\s*((?:[\\p{L}_$][\\w$]*::)*[\\p{L}_$][\\w$]*)",
+      "captures": {
+        "1": {
+          "name": "variable.parameter.qvt"
+        },
+        "2": {
+          "name": "punctuation.separator.colon.qvt"
+        },
+        "3": {
+          "name": "entity.name.type.qvt"
+        }
+      }
+    },
+    "modeltype": {
+      "match": "\\b(modeltype|metamodel)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.modeltype.qvto"
+        },
+        "2": {
+          "name": "entity.name.type.modeltype.qvto"
+        }
+      }
+    },
+    "transformation": {
+      "match": "\\b(transformation|library)\\s+((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.transformation.qvto"
+        },
+        "2": {
+          "name": "entity.name.class.qvto"
+        }
+      }
+    },
+    "operation": {
+      "comment": "mapping [inout] Context::name(, query, helper, constructor",
+      "match": "\\b(mapping|query|helper|constructor)\\s+(?:(in|out|inout)\\s+)?((?:(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)(?:\\([^)]*\\))?\\s*::\\s*)*)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "keyword.other.declaration.qvto"
+        },
+        "2": {
+          "name": "storage.modifier.direction.qvto"
+        },
+        "3": {
+          "name": "entity.name.type.context.qvto"
+        },
+        "4": {
+          "name": "entity.name.function.qvto"
+        }
+      }
+    },
+    "main": {
+      "match": "\\b(main)\\s*(?=\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.main.qvto"
+        }
+      }
+    },
+    "property": {
+      "match": "\\b(?:(configuration|intermediate)\\s+)?(property)\\s+((?:(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)::)*)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.qvto"
+        },
+        "2": {
+          "name": "keyword.other.property.qvto"
+        },
+        "3": {
+          "name": "entity.name.type.context.qvto"
+        },
+        "4": {
+          "name": "variable.other.property.qvto"
+        }
+      }
+    },
+    "mapping-call": {
+      "comment": "[.|->] map name(...), xmap Ctx::name(...)",
+      "match": "(?:(\\?->|->)|(\\.(?!\\.)))?\\s*\\b(map|xmap)\\s+((?:(?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*)::)*)((?:_'(?:[^'\\\\]|\\\\.)*'|[\\p{L}_$][\\w$]*))(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.arrow.qvto"
+        },
+        "2": {
+          "name": "keyword.operator.navigation.qvto"
+        },
+        "3": {
+          "name": "keyword.other.map.qvto"
+        },
+        "4": {
+          "name": "entity.name.type.context.qvto"
+        },
+        "5": {
+          "name": "entity.name.function.mapping.qvto"
+        }
+      }
+    },
+    "imperative-iterators": {
+      "match": "(->)\\s*(xselect|xcollect|selectOne|collectOne|collectselect|collectselectOne|forEach|forOne)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.arrow.qvto"
+        },
+        "2": {
+          "name": "support.function.iterator.qvto"
+        }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(?:if|then|elif|else|endif|while|switch|case|return|break|continue|do|compute|try|except|raise)\\b",
+          "name": "keyword.control.qvto"
+        },
+        {
+          "match": "\\b(?:modeltype|metamodel|uses|transformation|library|import|extends|access|refines|mapping|query|helper|constructor|main|property|configuration|intermediate|class|init|population|end|when|where|inherits|merges|disjuncts|object|var|log|assert|with|new|tag|rename|typedef)\\b",
+          "name": "keyword.other.qvto"
+        },
+        {
+          "match": "\\b(?:in|out|inout|abstract|blackbox|static|late|composes|references|readonly|derived|ordered)\\b",
+          "name": "storage.modifier.qvto"
+        },
+        {
+          "match": "\\b(?:resolve|resolveone|resolveIn|resolveoneIn|invresolve|invresolveone|invresolveIn|invresolveoneIn)\\b",
+          "name": "support.function.resolve.qvto"
+        },
+        {
+          "match": "\\b(?:this|result|self)\\b",
+          "name": "variable.language.qvto"
+        },
+        {
+          "match": "\\b(?:List|Dict)\\b",
+          "name": "support.type.qvto"
+        },
+        {
+          "match": "\\b(?:warning|error|fatal)\\b",
+          "name": "constant.language.severity.qvto"
+        },
+        {
+          "include": "source.ocl#keywords"
+        }
+      ]
+    },
+    "resolve-call": {
+      "comment": "[.|->] [late] resolve...(...)",
+      "match": "(?:(\\?->|->)|(\\.(?!\\.)))?\\s*\\b(?:(late)\\s+)?(resolve|resolveone|resolveIn|resolveoneIn|invresolve|invresolveone|invresolveIn|invresolveoneIn)\\b(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.arrow.qvto"
+        },
+        "2": {
+          "name": "keyword.operator.navigation.qvto"
+        },
+        "3": {
+          "name": "storage.modifier.late.qvto"
+        },
+        "4": {
+          "name": "support.function.resolve.qvto"
+        }
+      }
+    }
+  }
+}

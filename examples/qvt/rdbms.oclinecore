@@ -1,0 +1,40 @@
+-- A relational schema metamodel: the target of uml2rdbms.qvto and uml2rdbms.qvtr. Its
+-- invariants are checked on the schemas the transformations produce.
+
+package rdbms : rdbms = 'http://www.example.org/qvt/rdbms' {
+  abstract class RModelElement {
+    attribute name : String;
+  }
+
+  class Schema extends RModelElement {
+    property tables#schema : Table[*] { ordered, composes };
+  }
+
+  class Table extends RModelElement {
+    property schema#tables : Schema[?];
+    property columns#owner : Column[*] { ordered, composes };
+    property keys#owner : Key[*] { ordered, composes };
+    property foreignKeys#owner : ForeignKey[*] { ordered, composes };
+
+    invariant HasPrimaryKey('Table ' + name + ' has no primary key'): keys->notEmpty();
+    invariant UniqueColumnNames('Table ' + name + ' has columns of the same name'): columns->isUnique(name);
+  }
+
+  class Column extends RModelElement {
+    property owner#columns : Table[?];
+    attribute type : String;
+  }
+
+  class Key extends RModelElement {
+    property owner#keys : Table[?];
+    property columns : Column[+];
+  }
+
+  class ForeignKey extends RModelElement {
+    property owner#foreignKeys : Table[?];
+    property columns : Column[+];
+    property refersTo : Key;
+
+    invariant SameWidth: columns->size() = refersTo.columns->size();
+  }
+}

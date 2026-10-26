@@ -233,6 +233,130 @@ pub enum ExprKind {
     TupleLit(Vec<VarDecl>),
     /// Placeholder produced by error recovery.
     Error,
+
+    // ---- Imperative OCL (QVT): only the parser's QVT dialect produces these.
+    /// `{ e1; e2; ... }` or `do { ... }`: evaluates its expressions in order, in a scope of its
+    /// own; its value is the value of the last one.
+    Block(Vec<Expr>),
+    /// `var x : T := e` (also several at once: `var a := 1, b := 2`).
+    VarDecls(Vec<VarDecl>),
+    /// `target := value`, or `target += value` (`add`: appends to collections and many-valued
+    /// properties). The target is a variable or a property.
+    Assign {
+        target: Box<Expr>,
+        value: Box<Expr>,
+        add: bool,
+    },
+    /// `while (cond) { body }`, optionally with a declaration (`while (v := e; cond)`).
+    While {
+        init: Option<Box<VarDecl>>,
+        cond: Box<Expr>,
+        body: Box<Expr>,
+    },
+    /// `source->forEach(v | cond) { body }` (`one`: `forOne`, which stops after the first
+    /// element the body runs for).
+    ForEach {
+        source: Box<Expr>,
+        iterators: Vec<VarDecl>,
+        condition: Option<Box<Expr>>,
+        body: Box<Expr>,
+        one: bool,
+    },
+    /// `switch { case (c) e; ... else e; }`, and the imperative `if` without an `else`: the
+    /// value of the first alternative whose condition holds, else of `default` (else null).
+    Switch {
+        cases: Vec<(Expr, Expr)>,
+        default: Option<Box<Expr>>,
+    },
+    /// `return e` (or `return`): ends the enclosing operation or mapping.
+    Return(Option<Box<Expr>>),
+    Break,
+    Continue,
+    /// `compute (v : T := init) { body }`: the value of `v` after the body.
+    Compute {
+        var: Box<VarDecl>,
+        body: Box<Expr>,
+    },
+    /// `log(message [, data [, level]]) [when cond]`.
+    Log {
+        args: Vec<Expr>,
+        when: Option<Box<Expr>>,
+    },
+    /// `assert [warning|error|fatal] (cond) [with log(...)]`.
+    Assert {
+        severity: Option<Ident>,
+        condition: Box<Expr>,
+        log: Option<Box<Expr>>,
+    },
+
+    // ---- QVT Operational Mappings: the meaning is the transformation's (see `crate::host`).
+    /// `object [v :] [T][@extent] { body }`: creates (or, for a variable holding an object,
+    /// updates) an object and populates it; in the body, properties of the object can be
+    /// named without a source.
+    Object {
+        var: Option<Ident>,
+        ty: Option<TypeExpr>,
+        extent: Option<Ident>,
+        body: Vec<Expr>,
+    },
+    /// `[source.|source->]map name(args)` (`strict`: `xmap`). With `->`, the mapping is applied
+    /// to each element of the source.
+    MapCall {
+        source: Option<Box<Expr>>,
+        arrow: bool,
+        strict: bool,
+        /// The mapping's name, optionally qualified by its context type (`map T::name()`).
+        name: Vec<Ident>,
+        args: Vec<Expr>,
+    },
+    /// `[source.]resolve(v : T | cond)` and its variants (`resolveone`, `invresolve`,
+    /// `resolveIn(T::mapping, ...)`, ... and `late resolve...`).
+    Resolve {
+        source: Option<Box<Expr>>,
+        arrow: bool,
+        /// Only the first result (`resolveone`).
+        one: bool,
+        /// From targets back to sources (`invresolve`).
+        inverse: bool,
+        late: bool,
+        /// The mapping of `resolveIn` (a context type and a name).
+        mapping: Option<Vec<Ident>>,
+        var: Option<Ident>,
+        ty: Option<TypeExpr>,
+        condition: Option<Box<Expr>>,
+    },
+    /// `new T[@extent](args)`.
+    New {
+        ty: TypeExpr,
+        extent: Option<Ident>,
+        args: Vec<Expr>,
+    },
+}
+
+impl ExprKind {
+    /// Whether this is an expression of Imperative OCL or QVT Operational Mappings (which
+    /// plain OCL documents never contain).
+    pub fn is_imperative(&self) -> bool {
+        matches!(
+            self,
+            ExprKind::Block(_)
+                | ExprKind::VarDecls(_)
+                | ExprKind::Assign { .. }
+                | ExprKind::While { .. }
+                | ExprKind::ForEach { .. }
+                | ExprKind::Switch { .. }
+                | ExprKind::Return(_)
+                | ExprKind::Break
+                | ExprKind::Continue
+                | ExprKind::Compute { .. }
+                | ExprKind::Log { .. }
+                | ExprKind::Assert { .. }
+                | ExprKind::Object { .. }
+                | ExprKind::MapCall { .. }
+                | ExprKind::Resolve { .. }
+                | ExprKind::New { .. }
+        )
+    }
 }
 
 /// Iterator names recognized after `->`.
@@ -318,6 +442,88 @@ impl Expr {
             ExprKind::TupleLit(parts) => {
                 for p in parts {
                     var(p, f);
+                }
+            }
+            ExprKind::Block(items) => {
+                for e in items {
+                    e.walk(f);
+                }
+            }
+            ExprKind::VarDecls(vars) => {
+                for v in vars {
+                    var(v, f);
+                }
+            }
+            ExprKind::Assign { target, value, .. } => {
+                target.walk(f);
+                value.walk(f);
+            }
+            ExprKind::While { init, cond, body } => {
+                if let Some(v) = init {
+                    var(v, f);
+                }
+                cond.walk(f);
+                body.walk(f);
+            }
+            ExprKind::ForEach { source, condition, body, .. } => {
+                source.walk(f);
+                if let Some(c) = condition {
+                    c.walk(f);
+                }
+                body.walk(f);
+            }
+            ExprKind::Switch { cases, default } => {
+                for (c, e) in cases {
+                    c.walk(f);
+                    e.walk(f);
+                }
+                if let Some(d) = default {
+                    d.walk(f);
+                }
+            }
+            ExprKind::Return(Some(e)) => e.walk(f),
+            ExprKind::Compute { var: v, body } => {
+                var(v, f);
+                body.walk(f);
+            }
+            ExprKind::Log { args, when } => {
+                for a in args {
+                    a.walk(f);
+                }
+                if let Some(w) = when {
+                    w.walk(f);
+                }
+            }
+            ExprKind::Assert { condition, log, .. } => {
+                condition.walk(f);
+                if let Some(l) = log {
+                    l.walk(f);
+                }
+            }
+            ExprKind::Object { body, .. } => {
+                for e in body {
+                    e.walk(f);
+                }
+            }
+            ExprKind::MapCall { source, args, .. } => {
+                if let Some(s) = source {
+                    s.walk(f);
+                }
+                for a in args {
+                    a.walk(f);
+                }
+            }
+            ExprKind::New { args, .. } => {
+                for a in args {
+                    a.walk(f);
+                }
+            }
+            ExprKind::Resolve { source, condition, .. } => {
+                if let Some(s) = source {
+                    s.walk(f);
+                }
+                if let Some(c) = condition {
+                    c.walk(f);
                 }
             }
             _ => {}

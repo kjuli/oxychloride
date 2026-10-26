@@ -1,6 +1,6 @@
 ---
 name: run-oxychloride
-description: Build, run, test and drive Oxychloride (the OCL engine, its `oxy` CLI and the VS Code extension with its metamodel and Henshin rule diagram editors). Use when asked to run the CLI or the extension, check a change in the real UI, take a screenshot of the metamodel or rule diagram, try OCLinEcore/HUTN/Complete OCL/.ecore documents, validate models, or run the tests.
+description: Build, run, test and drive Oxychloride (the OCL engine, its `oxy` CLI and the VS Code extension with its metamodel and Henshin rule diagram editors). Use when asked to run the CLI or the extension, check a change in the real UI, take a screenshot of the metamodel or rule diagram, try OCLinEcore/HUTN/Complete OCL/.ecore documents, validate models, run QVT transformations, or run the tests.
 ---
 
 Oxychloride is an OCL engine with a CLI (`oxy`) and a VS Code extension (`vscode/`, a client of `oxy lsp`). Engine changes are checked with the CLI and `cargo test`; the extension with its integration tests (a real VS Code); the metamodel diagram's page is driven with
@@ -24,13 +24,16 @@ cargo run -q -p oxy-cli -- run examples/library/library.ocl -m examples/library/
 # ✗ 3 violations ... (9 constraints on 12 objects, 26 evaluations, 23 satisfied); exit code 1
 cargo run -q -p oxy-cli -- run examples/university/university.oclinecore examples/university/university.hutn --no-color
 # ✗ 5 violations ... (8 constraints on 16 objects, 30 evaluations, 25 satisfied); exit code 1
+cargo run -q -p oxy-cli -- qvt examples/qvt/uml2rdbms.qvto -e examples/qvt/uml.oclinecore -e examples/qvt/rdbms.oclinecore --in source=examples/qvt/company.hutn --hutn
+# prints the relational schema (HUTN); stderr: 10 mappings applied, 13 objects created (.qvtr: 8 relations applied)
 ```
 
-Other commands (`check`, `eval`, `convert`, `info`, `serve`) are in README.md. Tests:
+Other commands (`check`, `eval`, `convert`, `info`, `serve`) are in README.md; QVT in docs/QVT.md. Tests:
 
 ```bash
 cargo test                                  # engine, CLI, FFI, language server
 cargo test -p oxychloride --test diagram    # metamodel diagrams and their text edits only
+cargo test -p oxy-qvt                       # QVT Operational Mappings and Relations
 cargo clippy --all-targets                  # must be warning-free
 (cd vscode && npm run typecheck && npm test)   # extension + webviews; integration tests in a downloaded VS Code (~10 s)
 ```

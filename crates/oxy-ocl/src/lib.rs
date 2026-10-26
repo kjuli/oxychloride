@@ -10,14 +10,19 @@ pub use span::{LineIndex, Position, Span};
 mod check;
 pub mod env;
 pub mod eval;
+pub mod host;
 pub mod oclinecore;
 pub mod resolution;
 pub mod types;
 pub mod validate;
 pub mod value;
 
-pub use env::{Environment, EnvironmentBuilder, Invariant, Source, SourceId, SourceKind, SourcedDiagnostic};
-pub use eval::{ContractCheck, Evaluator};
+pub use check::Checker;
+pub use env::{
+    Environment, EnvironmentBuilder, Invariant, PackageAlias, Source, SourceId, SourceKind, SourcedDiagnostic,
+};
+pub use eval::{ContractCheck, Evaluator, LateResolve};
+pub use host::{CheckHost, Host, ResolveRequest};
 pub use resolution::{Analysis, Resolution};
 pub use types::Type;
 pub use validate::{ConstraintResult, Status, UncheckedOperation, Validation, validate, validate_model};

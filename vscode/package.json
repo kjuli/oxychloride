@@ -1,7 +1,7 @@
 {
   "name": "oxychloride",
   "displayName": "Oxychloride: OCL for Ecore models",
-  "description": "Metamodels in OCLinEcore and Ecore, edited as text or as diagrams; models in HUTN and XMI, checked live against their OCL invariants, pre- and postconditions; an OCL console; Henshin graph transformations, as text or as rule diagrams in Henshin's notation (.henshin files of Henshin's editors included, kept equivalent to their text), with a step-by-step view and state space exploration.",
+  "description": "Metamodels in OCLinEcore and Ecore, edited as text or as diagrams; models in HUTN and XMI, checked live against their OCL invariants, pre- and postconditions; an OCL console; Henshin graph transformations, as text or as rule diagrams in Henshin's notation (.henshin files of Henshin's editors included, kept equivalent to their text), with a step-by-step view and state space exploration; QVT model transformations (Operational Mappings and Relations), checked as you type and run on models from the context menu.",
   "version": "0.1.0",
   "publisher": "palladio",
   "repository": {
@@ -25,11 +25,14 @@
     "Henshin",
     "graph transformation",
     "diagram",
+    "QVT",
+    "QVTo",
+    "QVTr",
     "model transformation"
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi,ecore,henshin_text,henshin}",
+    "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi,ecore,henshin_text,henshin,qvto,qvtr}",
     "onLanguage:xml"
   ],
   "contributes": {
@@ -95,6 +98,36 @@
         }
       },
       {
+        "id": "qvto",
+        "aliases": [
+          "QVT Operational",
+          "qvto"
+        ],
+        "extensions": [
+          ".qvto"
+        ],
+        "configuration": "./language-configuration/qvto.json",
+        "icon": {
+          "light": "./media/file-icons/qvto.svg",
+          "dark": "./media/file-icons/qvto-dark.svg"
+        }
+      },
+      {
+        "id": "qvtr",
+        "aliases": [
+          "QVT Relations",
+          "qvtr"
+        ],
+        "extensions": [
+          ".qvtr"
+        ],
+        "configuration": "./language-configuration/qvtr.json",
+        "icon": {
+          "light": "./media/file-icons/qvtr.svg",
+          "dark": "./media/file-icons/qvtr-dark.svg"
+        }
+      },
+      {
         "id": "xml",
         "extensions": [
           ".xmi",
@@ -126,6 +159,16 @@
         "language": "henshin",
         "scopeName": "source.henshin",
         "path": "./syntaxes/henshin.tmLanguage.json"
+      },
+      {
+        "language": "qvto",
+        "scopeName": "source.qvto",
+        "path": "./syntaxes/qvto.tmLanguage.json"
+      },
+      {
+        "language": "qvtr",
+        "scopeName": "source.qvtr",
+        "path": "./syntaxes/qvtr.tmLanguage.json"
       }
     ],
     "configuration": {
@@ -424,6 +467,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "oxychloride.runQvt",
+        "title": "Run QVT Transformation…",
+        "category": "Oxychloride",
+        "icon": "$(run-all)"
+      },
+      {
         "command": "oxychloride.refresh",
         "title": "Refresh",
         "category": "Oxychloride",
@@ -579,6 +628,11 @@
           "command": "oxychloride.unregisterMetamodel",
           "when": "view == oxychloride.registry && viewItem == registryEntry",
           "group": "1_edit@1"
+        },
+        {
+          "command": "oxychloride.runQvt",
+          "when": "view == oxychloride.models && viewItem == resource",
+          "group": "1_create@3"
         }
       ],
       "editor/title": [
@@ -626,6 +680,11 @@
           "command": "oxychloride.createHenshinCounterpart",
           "when": "editorLangId == henshin || resourceExtname == .henshin",
           "group": "1_export@3"
+        },
+        {
+          "command": "oxychloride.runQvt",
+          "when": "editorLangId == qvto || editorLangId == qvtr",
+          "group": "navigation@1"
         }
       ],
       "editor/context": [
@@ -643,6 +702,11 @@
           "command": "oxychloride.generateCode",
           "when": "editorLangId == oclinecore || resourceExtname == .ecore",
           "group": "1_modification@10"
+        },
+        {
+          "command": "oxychloride.runQvt",
+          "when": "editorLangId == hutn || resourceExtname == .xmi || editorLangId == qvto || editorLangId == qvtr",
+          "group": "1_modification@11"
         }
       ],
       "explorer/context": [
@@ -704,6 +768,11 @@
         {
           "command": "oxychloride.createHenshinCounterpart",
           "when": "resourceExtname == .henshin_text || resourceExtname == .henshin",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.runQvt",
+          "when": "resourceExtname =~ /^\\.(xmi|hutn|qvto|qvtr)$/",
           "group": "7_modification"
         }
       ],

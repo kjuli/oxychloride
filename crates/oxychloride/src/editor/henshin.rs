@@ -185,7 +185,7 @@ impl Workspace {
         Some(HoverInfo { range, contents: contents.to_string() })
     }
 
-    fn text_range(&self, text: &str, span: &std::ops::Range<usize>) -> Range {
+    pub(super) fn text_range(&self, text: &str, span: &std::ops::Range<usize>) -> Range {
         let index = oxy_ocl::LineIndex::new(text);
         let p = |o: usize| {
             let p = index.position(text, o);

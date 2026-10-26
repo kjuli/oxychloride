@@ -5,10 +5,11 @@
 //! weaker than its dynamic semantics: anything typed [`Type::Error`] is accepted silently,
 //! so one mistake does not cascade into many diagnostics.
 
-use oxy_ecore::{Metamodel, PackageId};
+use oxy_ecore::{ClassifierId, Metamodel, PackageId};
 
 use crate::diagnostic::Diagnostic;
-use crate::env::{Environment, lookup_classifier, resolve_type};
+use crate::env::{Environment, PackageAlias, lookup_classifier_in, resolve_type_in};
+use crate::host::CheckHost;
 use crate::resolution::{Analysis, Property, Resolution, UserOperation};
 use crate::span::Span;
 use crate::syntax::ast::*;
@@ -18,12 +19,20 @@ struct Scope {
     vars: Vec<(String, Type)>,
     /// Element type of an implicit iterator (or the type of `self` in the outermost scope).
     implicit: Option<Type>,
+    /// Whether operations can be called on the implicit source without a source (not on an
+    /// object being populated, see `Evaluator::with_implicit`).
+    operations: bool,
 }
 
-pub(crate) struct Checker<'a> {
+/// The type checker of OCL expressions. Languages built on OCL (QVT) use it with a
+/// [`CheckHost`] and package aliases ([`Checker::for_language`]): they bind the variables of
+/// their operations and check their bodies.
+pub struct Checker<'a> {
     mm: &'a Metamodel,
     env: &'a Environment,
     package: Option<PackageId>,
+    aliases: &'a [PackageAlias],
+    host: Option<&'a dyn CheckHost>,
     scopes: Vec<Scope>,
     diags: Vec<Diagnostic>,
     types: Vec<(Span, Type)>,
@@ -31,6 +40,10 @@ pub(crate) struct Checker<'a> {
     analysis: Analysis,
     /// Whether `@pre` may be used (only in postconditions).
     at_pre_allowed: bool,
+    /// The number of loops around the expression being checked (for `break`).
+    loops: u32,
+    /// The types of the `return`ed values, with their spans.
+    returns: Vec<(Span, Type)>,
 }
 
 /// Outcome of looking up a library operation.
@@ -46,19 +59,40 @@ impl<'a> Checker<'a> {
             mm,
             env,
             package,
-            scopes: vec![Scope { vars: Vec::new(), implicit: None }],
+            aliases: &[],
+            host: None,
+            scopes: vec![Scope { vars: Vec::new(), implicit: None, operations: true }],
             diags: Vec::new(),
             types: Vec::new(),
             analysis: Analysis::default(),
             at_pre_allowed: false,
+            loops: 0,
+            returns: Vec::new(),
         }
+    }
+
+    /// A checker for the expressions of a language built on OCL: its names, operations and
+    /// expressions come from `host`, its type names may use `aliases`.
+    pub fn for_language(
+        mm: &'a Metamodel,
+        env: &'a Environment,
+        host: &'a dyn CheckHost,
+        aliases: &'a [PackageAlias],
+    ) -> Self {
+        Checker { aliases, host: Some(host), ..Checker::new(mm, env, None) }
     }
 
     pub(crate) fn allow_at_pre(&mut self) {
         self.at_pre_allowed = true;
     }
 
-    pub(crate) fn bind_self(&mut self, ty: Type, alias: Option<&str>) {
+    pub fn metamodel(&self) -> &'a Metamodel {
+        self.mm
+    }
+
+    /// Binds `self` (and an alias of it) in the outermost scope; `self`'s properties can then be
+    /// used without `self.`.
+    pub fn bind_self(&mut self, ty: Type, alias: Option<&str>) {
         let scope = &mut self.scopes[0];
         scope.vars.push(("self".into(), ty.clone()));
         if let Some(a) = alias {
@@ -67,20 +101,70 @@ impl<'a> Checker<'a> {
         scope.implicit = Some(ty);
     }
 
-    pub(crate) fn bind(&mut self, name: &str, ty: Type) {
-        self.scopes.last_mut().unwrap().vars.push((name.into(), ty));
+    /// Declares a variable in the innermost scope.
+    pub fn bind(&mut self, name: &str, ty: Type) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.vars.push((name.into(), ty));
+        }
     }
 
-    pub(crate) fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+    /// Opens a scope; with `implicit`, the properties and operations of that type can be used
+    /// without a source in it (like those of `self`).
+    pub fn push_scope(&mut self, implicit: Option<Type>) {
+        self.scopes.push(Scope { vars: Vec::new(), implicit, operations: true });
+    }
+
+    /// Opens the scope of an object being populated (`object`, a mapping's population): its
+    /// properties can be used without a source, its operations cannot.
+    pub fn push_object_scope(&mut self, object: Type) {
+        self.scopes.push(Scope { vars: Vec::new(), implicit: Some(object), operations: false });
+    }
+
+    pub fn pop_scope(&mut self) {
+        if self.scopes.len() > 1 {
+            self.scopes.pop();
+        }
+    }
+
+    pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diags)
     }
 
-    pub(crate) fn take_types(&mut self) -> Vec<(Span, Type)> {
+    /// The types of the checked expressions, with their spans.
+    pub fn take_types(&mut self) -> Vec<(Span, Type)> {
         std::mem::take(&mut self.types)
     }
 
-    pub(crate) fn take_analysis(&mut self) -> Analysis {
+    pub fn take_analysis(&mut self) -> Analysis {
         std::mem::take(&mut self.analysis)
+    }
+
+    /// The types of the values `return`ed since the last call, with their spans.
+    pub fn take_returns(&mut self) -> Vec<(Span, Type)> {
+        std::mem::take(&mut self.returns)
+    }
+
+    /// Resolves a type written in the source, reporting unknown names.
+    pub fn resolve_type(&mut self, te: &TypeExpr) -> Type {
+        let mut diags = Vec::new();
+        let t = resolve_type_in(self.mm, self.package, self.aliases, te, &mut diags);
+        self.diags.extend(diags);
+        t
+    }
+
+    /// Resolves a classifier name (with the package aliases).
+    pub fn lookup_classifier(&self, path: &[&str]) -> Result<ClassifierId, String> {
+        lookup_classifier_in(self.mm, self.package, self.aliases, path)
+    }
+
+    /// Reports an error.
+    pub fn report_error(&mut self, span: Span, message: impl Into<String>) {
+        self.diags.push(Diagnostic::error(span, message));
+    }
+
+    /// Reports a warning.
+    pub fn report_warning(&mut self, span: Span, message: impl Into<String>) {
+        self.diags.push(Diagnostic::warning(span, message));
     }
 
     fn resolved(&mut self, e: &Expr, r: Resolution) {
@@ -96,7 +180,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Checks `e` and reports an error unless its type conforms to `expected`.
-    pub(crate) fn expect(&mut self, e: &Expr, expected: &Type, what: &str) -> Type {
+    pub fn expect(&mut self, e: &Expr, expected: &Type, what: &str) -> Type {
         let t = self.check(e);
         if !t.conforms_to(expected, self.mm) && !matches!(e.kind, ExprKind::Error) {
             let msg = format!(
@@ -109,7 +193,8 @@ impl<'a> Checker<'a> {
         t
     }
 
-    pub(crate) fn check(&mut self, e: &Expr) -> Type {
+    /// Checks an expression and returns its type.
+    pub fn check(&mut self, e: &Expr) -> Type {
         if !self.at_pre_allowed
             && matches!(
                 e.kind,
@@ -120,13 +205,14 @@ impl<'a> Checker<'a> {
         {
             self.error(e.span, "'@pre' can only be used in postconditions");
         }
-        let t = self.check_inner(e);
+        let t = stacker::maybe_grow(crate::eval::RED_ZONE, crate::eval::STACK_CHUNK, || self.check_inner(e));
         self.types.push((e.span, t.clone()));
         self.analysis.types.insert(e.id, t.clone());
         t
     }
 
-    fn lookup_var(&self, name: &str) -> Option<Type> {
+    /// The type of a variable in scope.
+    pub fn lookup_var(&self, name: &str) -> Option<Type> {
         self.scopes.iter().rev().find_map(|s| s.vars.iter().rev().find(|(n, _)| n == name).map(|(_, t)| t.clone()))
     }
 
@@ -152,9 +238,7 @@ impl<'a> Checker<'a> {
                 t
             }
             ExprKind::TypeLit(te) => {
-                let mut diags = Vec::new();
-                let t = resolve_type(self.mm, self.package, te, &mut diags);
-                self.diags.extend(diags);
+                let t = self.resolve_type(te);
                 Type::Meta(t.into())
             }
             ExprKind::Property { source, name, .. } => {
@@ -197,7 +281,7 @@ impl<'a> Checker<'a> {
             ExprKind::Iterate { source, iterators, accumulator, body, .. } => {
                 let src = self.check(source);
                 let elem = self.element_type(&src);
-                self.scopes.push(Scope { vars: Vec::new(), implicit: None });
+                self.scopes.push(Scope { vars: Vec::new(), implicit: None, operations: true });
                 for v in iterators {
                     let t = self.declared_or(v, elem.clone());
                     self.bind(&v.name.name, t);
@@ -249,7 +333,7 @@ impl<'a> Checker<'a> {
                 a.common_supertype(&b, self.mm)
             }
             ExprKind::Let { vars, body } => {
-                self.scopes.push(Scope { vars: Vec::new(), implicit: None });
+                self.scopes.push(Scope { vars: Vec::new(), implicit: None, operations: true });
                 for v in vars {
                     let init = v.init.as_ref().map_or(Type::Error, |i| self.check(i));
                     let t = self.declared_or(v, init.clone());
@@ -269,12 +353,7 @@ impl<'a> Checker<'a> {
                 t
             }
             ExprKind::CollectionLit { kind, element_type, items } => {
-                let declared = element_type.as_ref().map(|te| {
-                    let mut diags = Vec::new();
-                    let t = resolve_type(self.mm, self.package, te, &mut diags);
-                    self.diags.extend(diags);
-                    t
-                });
+                let declared = element_type.as_ref().map(|te| self.resolve_type(te));
                 let mut elem: Option<Type> = None;
                 for item in items {
                     let t = match item {
@@ -311,17 +390,13 @@ impl<'a> Checker<'a> {
                 }
                 Type::tuple(out)
             }
+            _ => self.check_imperative(e),
         }
     }
 
     fn declared_or(&mut self, v: &VarDecl, fallback: Type) -> Type {
         match &v.ty {
-            Some(te) => {
-                let mut diags = Vec::new();
-                let t = resolve_type(self.mm, self.package, te, &mut diags);
-                self.diags.extend(diags);
-                t
-            }
+            Some(te) => self.resolve_type(te),
             None => fallback,
         }
     }
@@ -342,6 +417,9 @@ impl<'a> Checker<'a> {
             if let Some(t) = self.lookup_var(name) {
                 return (t, Some(Resolution::Variable));
             }
+            if let Some(t) = self.host.and_then(|h| h.variable(name)) {
+                return (t, Some(Resolution::Variable));
+            }
             let implicit: Vec<Type> = self.scopes.iter().rev().filter_map(|s| s.implicit.clone()).collect();
             for (depth, src) in implicit.iter().enumerate() {
                 if let Some((t, property, _)) = self.property(src, name) {
@@ -351,7 +429,7 @@ impl<'a> Checker<'a> {
             if let Some(t) = library_type(name) {
                 return (Type::Meta(t.clone().into()), Some(Resolution::Type(t)));
             }
-            if let Ok(c) = lookup_classifier(mm, self.package, &[name]) {
+            if let Ok(c) = self.lookup_classifier(&[name]) {
                 let t = Type::of_classifier(mm, c);
                 return (Type::Meta(t.clone().into()), Some(Resolution::Type(t)));
             }
@@ -367,7 +445,7 @@ impl<'a> Checker<'a> {
         }
         let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
         let (last, head) = names.split_last().unwrap();
-        if let Ok(c) = lookup_classifier(mm, self.package, head)
+        if let Ok(c) = self.lookup_classifier(head)
             && mm.is_enum(c)
         {
             if let Some(literal) = mm.enum_literal_index(c, last) {
@@ -376,7 +454,7 @@ impl<'a> Checker<'a> {
             self.error(span, format!("enumeration '{}' has no literal '{last}'", mm.classifier(c).name));
             return (Type::Error, None);
         }
-        match lookup_classifier(mm, self.package, &names) {
+        match self.lookup_classifier(&names) {
             Ok(c) => {
                 let t = Type::of_classifier(mm, c);
                 (Type::Meta(t.clone().into()), Some(Resolution::Type(t)))
@@ -405,14 +483,21 @@ impl<'a> Checker<'a> {
                         false,
                     ));
                 }
-                let d = self.env.find_def_attribute(mm, *c, name)?;
-                Some((d.ty.clone(), Some(Property::DefAttribute { class: d.class, name: d.name.clone() }), false))
+                match self.env.find_def_attribute(mm, *c, name) {
+                    Some(d) => Some((
+                        d.ty.clone(),
+                        Some(Property::DefAttribute { class: d.class, name: d.name.clone() }),
+                        false,
+                    )),
+                    None => self.host?.property(mm, src, name).map(|t| (t, None, false)),
+                }
             }
             Type::Tuple(parts) => parts
                 .iter()
                 .find(|(n, _)| n == name)
                 .map(|(_, t)| (t.clone(), Some(Property::TuplePart(name.to_string())), false)),
             Type::Meta(_) if name == "name" => Some((Type::String, Some(Property::TypeName), false)),
+            Type::Model(_) => self.host?.property(mm, src, name).map(|t| (t, None, false)),
             Type::Collection(k, e) => {
                 let (t, property, _) = self.property(e, name)?;
                 Some((Type::collection(k.collect_kind(), t.flattened_element()), property, true))
@@ -473,7 +558,12 @@ impl<'a> Checker<'a> {
             } else {
                 Type::collection(CollectionKind::Set, src.clone())
             };
-            let l = self.collection_op(&coll, &name.name, args);
+            let mut l = self.collection_op(&coll, &name.name, args);
+            if matches!(l, Lookup::NotFound)
+                && let Some(found) = self.host_op(Some(&coll), &name.name, args)
+            {
+                l = found;
+            }
             return library(false, self.report(l, name, &coll));
         }
         if let Type::Collection(k, e) = src {
@@ -483,6 +573,11 @@ impl<'a> Checker<'a> {
             }
             // Implicit collect: `coll.op()` is `coll->collect(op())` (classic OCL).
             let (mut l, mut operation) = self.user_op(e, &name.name, args);
+            if matches!(l, Lookup::NotFound)
+                && let Some(found) = self.host_op(Some(e), &name.name, args)
+            {
+                l = found;
+            }
             if matches!(l, Lookup::NotFound) && !e.is_collection() {
                 l = self.library_op(e, &name.name, args);
                 operation = None;
@@ -507,14 +602,27 @@ impl<'a> Checker<'a> {
             return (t, Some(Resolution::Operation { operation, implicit: None, collect: false }));
         }
         if matches!(l, Lookup::NotFound) {
+            if let Some(found) = self.host_op(Some(src), &name.name, args) {
+                return (self.report(found, name, src), None);
+            }
             let l = self.library_op(src, &name.name, args);
             return library(false, self.report(l, name, src));
         }
         (self.report(l, name, src), None)
     }
 
+    /// An operation of the host (see [`CheckHost::operation`]).
+    fn host_op(&self, src: Option<&Type>, name: &str, args: &[(Type, Span)]) -> Option<Lookup> {
+        let types: Vec<Type> = args.iter().map(|(t, _)| t.clone()).collect();
+        Some(match self.host?.operation(self.mm, src, name, &types)? {
+            Ok(t) => Lookup::Found(t),
+            Err(e) => Lookup::BadArgs(e),
+        })
+    }
+
     fn implicit_call_type(&mut self, name: &Ident, args: &[(Type, Span)]) -> (Type, Option<Resolution>) {
-        let implicit: Vec<Type> = self.scopes.iter().rev().filter_map(|s| s.implicit.clone()).collect();
+        let implicit: Vec<Type> =
+            self.scopes.iter().rev().filter(|s| s.operations).filter_map(|s| s.implicit.clone()).collect();
         for (depth, src) in implicit.iter().enumerate() {
             let (l, operation) = self.user_op(src, &name.name, args);
             if !matches!(l, Lookup::NotFound) {
@@ -525,6 +633,12 @@ impl<'a> Checker<'a> {
                 });
                 return (self.report(l, name, src), r);
             }
+            if let Some(found) = self.host_op(Some(src), &name.name, args) {
+                return (self.report(found, name, src), None);
+            }
+        }
+        if let Some(found) = self.host_op(None, &name.name, args) {
+            return (self.report(found, name, &Type::Error), None);
         }
         // Library operations apply to the innermost implicit source (iterator element or self).
         match implicit.first() {
@@ -796,9 +910,31 @@ impl<'a> Checker<'a> {
         };
         let (kind, elem) = match &coll {
             Type::Collection(k, e) => (*k, (**e).clone()),
-            _ => unreachable!(),
+            _ => (CollectionKind::Set, Type::Error),
         };
-        self.scopes.push(Scope { vars: Vec::new(), implicit: iterators.is_empty().then(|| elem.clone()) });
+        // `collectselect(i; r = e | cond)`: `r` is collected where `cond` holds.
+        if let [it, target] = iterators
+            && let Some(init) = &target.init
+            && name.name.starts_with("collectselect")
+        {
+            self.scopes.push(Scope { vars: Vec::new(), implicit: None, operations: true });
+            let t = self.declared_or(it, elem.clone());
+            self.bind(&it.name.name, t);
+            let value = self.check(init);
+            self.bind(&target.name.name, value.clone());
+            self.expect(body, &Type::Boolean, &format!("the condition of '{}'", name.name));
+            self.scopes.pop();
+            return if name.name == "collectselect" {
+                Type::collection(kind.collect_kind(), value.flattened_element())
+            } else {
+                value
+            };
+        }
+        self.scopes.push(Scope {
+            vars: Vec::new(),
+            implicit: iterators.is_empty().then(|| elem.clone()),
+            operations: true,
+        });
         for v in iterators {
             let t = self.declared_or(v, elem.clone());
             self.bind(&v.name.name, t);
@@ -808,6 +944,15 @@ impl<'a> Checker<'a> {
             "select" | "reject" | "forAll" | "exists" | "one" | "any" => {
                 self.expect(body, &Type::Boolean, &format!("the body of '{n}'"))
             }
+            // A condition, or a type to select the elements of.
+            "xselect" | "selectOne" => {
+                let t = self.check(body);
+                if !matches!(t, Type::Meta(_)) && !t.conforms_to(&Type::Boolean, mm) {
+                    let msg = format!("the body of '{n}' must be a Boolean or a type, but is {}", self.show(&t));
+                    self.error(body.span, msg);
+                }
+                t
+            }
             _ => self.check(body),
         };
         self.scopes.pop();
@@ -816,6 +961,16 @@ impl<'a> Checker<'a> {
         }
         match n {
             "select" | "reject" => coll,
+            "xselect" => match body_ty {
+                Type::Meta(t) => Type::collection(kind, (*t).clone()),
+                _ => coll,
+            },
+            "selectOne" => match body_ty {
+                Type::Meta(t) => (*t).clone(),
+                _ => elem,
+            },
+            "xcollect" | "collectselect" => Type::collection(kind.collect_kind(), body_ty.flattened_element()),
+            "collectOne" | "collectselectOne" => body_ty,
             "collect" => Type::collection(kind.collect_kind(), body_ty.flattened_element()),
             "collectNested" => Type::collection(kind.collect_kind(), body_ty),
             "forAll" | "exists" | "one" | "isUnique" => Type::Boolean,
@@ -886,6 +1041,372 @@ impl<'a> Checker<'a> {
                     Type::Error
                 })
             }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ Imperative OCL
+
+impl Checker<'_> {
+    /// Imperative OCL and the expressions of QVT Operational Mappings.
+    fn check_imperative(&mut self, e: &Expr) -> Type {
+        let mm = self.mm;
+        match &e.kind {
+            ExprKind::Block(items) => {
+                self.push_scope(None);
+                let mut t = Type::OclVoid;
+                for item in items {
+                    t = self.check(item);
+                }
+                self.pop_scope();
+                t
+            }
+            ExprKind::VarDecls(vars) => {
+                let mut t = Type::OclVoid;
+                for v in vars {
+                    t = self.declare(v);
+                }
+                t
+            }
+            ExprKind::Assign { target, value, add } => {
+                let value_ty = self.check(value);
+                if let Some(target_ty) = self.assign_target(target) {
+                    self.check_assignment(&target_ty, &value_ty, *add, value.span);
+                }
+                value_ty
+            }
+            ExprKind::While { init, cond, body } => {
+                self.push_scope(None);
+                let t = init.as_ref().map_or(Type::OclVoid, |v| self.declare(v));
+                self.expect(cond, &Type::Boolean, "a 'while' condition");
+                self.loops += 1;
+                self.check(body);
+                self.loops -= 1;
+                self.pop_scope();
+                t
+            }
+            ExprKind::ForEach { source, iterators, condition, body, .. } => {
+                let src = self.check(source);
+                let elem = self.element_type(&src);
+                self.push_scope(iterators.is_empty().then(|| elem.clone()));
+                for v in iterators {
+                    let t = self.declared_or(v, elem.clone());
+                    self.bind(&v.name.name, t);
+                }
+                if let Some(c) = condition {
+                    self.expect(c, &Type::Boolean, "the condition of 'forEach'");
+                }
+                self.loops += 1;
+                self.check(body);
+                self.loops -= 1;
+                self.pop_scope();
+                Type::OclVoid
+            }
+            ExprKind::Switch { cases, default } => {
+                let mut result: Option<Type> = None;
+                for (c, b) in cases {
+                    self.expect(c, &Type::Boolean, "a condition");
+                    let t = self.check(b);
+                    result = Some(match result {
+                        None => t,
+                        Some(r) => r.common_supertype(&t, mm),
+                    });
+                }
+                if let Some(d) = default {
+                    let t = self.check(d);
+                    result = Some(match result {
+                        None => t,
+                        Some(r) => r.common_supertype(&t, mm),
+                    });
+                }
+                result.unwrap_or(Type::OclVoid)
+            }
+            ExprKind::Return(value) => {
+                let t = value.as_ref().map_or(Type::OclVoid, |v| self.check(v));
+                self.returns.push((e.span, t));
+                Type::OclVoid
+            }
+            ExprKind::Break | ExprKind::Continue => {
+                if self.loops == 0 {
+                    let word = if matches!(e.kind, ExprKind::Break) { "break" } else { "continue" };
+                    self.error(e.span, format!("'{word}' outside of a loop"));
+                }
+                Type::OclVoid
+            }
+            ExprKind::Compute { var, body } => {
+                self.push_scope(None);
+                let t = self.declare(var);
+                self.check(body);
+                self.pop_scope();
+                t
+            }
+            ExprKind::Log { args, when } => {
+                if args.is_empty() || args.len() > 3 {
+                    self.error(e.span, "'log' takes a message, and optionally a value and a level");
+                }
+                for a in args {
+                    self.check(a);
+                }
+                if let Some(w) = when {
+                    self.expect(w, &Type::Boolean, "the condition of 'log'");
+                }
+                Type::OclVoid
+            }
+            ExprKind::Assert { severity, condition, log } => {
+                if let Some(s) = severity
+                    && !matches!(s.name.as_str(), "warning" | "error" | "fatal")
+                {
+                    self.error(s.span, format!("unknown severity '{}' (warning, error or fatal)", s.name));
+                }
+                self.expect(condition, &Type::Boolean, "an assertion");
+                if let Some(l) = log {
+                    self.check(l);
+                }
+                Type::OclVoid
+            }
+            ExprKind::Object { var, ty, extent, body } => {
+                let declared = ty.as_ref().map(|t| self.resolve_type(t));
+                let existing = var.as_ref().and_then(|v| self.lookup_var(&v.name));
+                let t = match (&declared, &existing) {
+                    (Some(t), _) => t.clone(),
+                    (None, Some(t)) => t.clone(),
+                    (None, None) => {
+                        let span = var.as_ref().map_or(e.span, |v| v.span);
+                        self.error(span, "the type of the object is missing");
+                        Type::Error
+                    }
+                };
+                // An object in the variable already is updated, not created.
+                let class = if existing.is_some() {
+                    match &t {
+                        Type::Classifier(c) => Some(*c),
+                        _ => None,
+                    }
+                } else {
+                    self.creatable(&t, ty.as_ref().map_or(e.span, |t| t.span), extent.is_none())
+                };
+                if let (Some(d), Some(x)) = (&declared, &existing)
+                    && !d.conforms_to(x, mm)
+                {
+                    let msg = format!(
+                        "an object of type {} cannot be assigned to a variable of type {}",
+                        self.show(d),
+                        self.show(x)
+                    );
+                    self.error(e.span, msg);
+                }
+                if let Some(x) = extent {
+                    self.check_extent(x, class);
+                }
+                if let Some(v) = var
+                    && existing.is_none()
+                {
+                    self.bind(&v.name, t.clone());
+                }
+                self.push_object_scope(t.clone());
+                for item in body {
+                    self.check(item);
+                }
+                self.pop_scope();
+                t
+            }
+            ExprKind::New { ty, extent, args } => {
+                let t = self.resolve_type(ty);
+                let class = self.creatable(&t, ty.span, extent.is_none());
+                if let Some(x) = extent {
+                    self.check_extent(x, class);
+                }
+                for a in args {
+                    self.check(a);
+                }
+                if !args.is_empty() {
+                    self.error(e.span, "constructors with arguments are not supported");
+                }
+                t
+            }
+            ExprKind::MapCall { source, arrow, name, args, .. } => {
+                let src = source.as_ref().map(|s| self.check(s));
+                let args: Vec<Type> = args.iter().map(|a| self.check(a)).collect();
+                let each = match &src {
+                    Some(Type::Collection(_, e)) => Some((**e).clone()),
+                    Some(t) if *arrow => Some(t.clone()),
+                    other => other.clone(),
+                };
+                let result = match self.host.map(|h| h.mapping(mm, each.as_ref(), name, &args)) {
+                    Some(Ok(t)) => t,
+                    Some(Err(msg)) => {
+                        let span = name.first().map_or(e.span, |n| n.span.to(name.last().map_or(n.span, |l| l.span)));
+                        self.error(span, msg);
+                        Type::Error
+                    }
+                    None => {
+                        self.error(e.span, "mappings can only be called in transformations");
+                        Type::Error
+                    }
+                };
+                match &src {
+                    Some(Type::Collection(k, _)) => Type::collection(k.collect_kind(), result),
+                    Some(_) if *arrow => Type::collection(CollectionKind::Sequence, result),
+                    _ => result,
+                }
+            }
+            ExprKind::Resolve { source, one, mapping, var, ty, condition, .. } => {
+                let src = source.as_ref().map(|s| self.check(s));
+                if let Some(m) = mapping
+                    && let Some(Err(msg)) = self.host.map(|h| h.mapping_reference(mm, m))
+                {
+                    let span = m[0].span.to(m[m.len() - 1].span);
+                    self.error(span, msg);
+                }
+                let target = ty.as_ref().map_or(Type::OclAny, |t| self.resolve_type(t));
+                if let Some(c) = condition {
+                    self.push_scope(None);
+                    if let Some(v) = var {
+                        self.bind(&v.name, target.clone());
+                    }
+                    self.expect(c, &Type::Boolean, "the condition of a resolve");
+                    self.pop_scope();
+                }
+                if *one && !matches!(src, Some(Type::Collection(..))) {
+                    target
+                } else {
+                    Type::collection(CollectionKind::Sequence, target)
+                }
+            }
+            _ => Type::Error,
+        }
+    }
+
+    /// Declares a variable of `var`: its declared type, else the type of its initial value.
+    fn declare(&mut self, v: &VarDecl) -> Type {
+        let init = v.init.as_ref().map(|i| self.check(i));
+        let t = match (&v.ty, &init) {
+            (Some(_), _) => self.declared_or(v, Type::Error),
+            (None, Some(t)) if *t == Type::OclVoid => Type::OclAny,
+            (None, Some(t)) => t.clone(),
+            (None, None) => {
+                self.error(v.span, format!("the variable '{}' needs a type or an initial value", v.name));
+                Type::Error
+            }
+        };
+        if let Some(i) = &init
+            && v.ty.is_some()
+        {
+            self.check_assignment(&t, i, false, v.span);
+        }
+        self.bind(&v.name.name, t.clone());
+        t
+    }
+
+    /// The type of what an assignment assigns (`None` if it cannot be assigned, reported).
+    fn assign_target(&mut self, target: &Expr) -> Option<Type> {
+        match &target.kind {
+            ExprKind::Name { path, .. } if path.len() == 1 => {
+                let name = path[0].name.as_str();
+                if let Some(t) = self.lookup_var(name) {
+                    if name == "self" {
+                        self.error(target.span, "'self' cannot be assigned");
+                        return None;
+                    }
+                    self.types.push((target.span, t.clone()));
+                    return Some(t);
+                }
+                if let Some(h) = self.host
+                    && let Some(t) = h.variable(name)
+                {
+                    if !h.assignable(name) {
+                        self.error(target.span, format!("'{name}' cannot be assigned"));
+                        return None;
+                    }
+                    self.types.push((target.span, t.clone()));
+                    return Some(t);
+                }
+                let implicit: Vec<Type> = self.scopes.iter().rev().filter_map(|s| s.implicit.clone()).collect();
+                for src in &implicit {
+                    if let Some((t, _, false)) = self.property(src, name) {
+                        self.types.push((target.span, t.clone()));
+                        return Some(t);
+                    }
+                }
+                self.error(target.span, format!("unknown variable or property '{name}'"));
+                None
+            }
+            ExprKind::Property { source, name, .. } => {
+                let src = self.check(source);
+                match self.property(&src, &name.name) {
+                    Some((t, _, collect)) => {
+                        if collect {
+                            self.error(name.span, "cannot assign a property of the elements of a collection");
+                            return None;
+                        }
+                        self.types.push((target.span, t.clone()));
+                        Some(t)
+                    }
+                    None => {
+                        let msg = self.unknown_property_message(&src, &name.name);
+                        self.error(name.span, msg);
+                        None
+                    }
+                }
+            }
+            ExprKind::Error => None,
+            _ => {
+                self.error(target.span, "only variables and properties can be assigned");
+                None
+            }
+        }
+    }
+
+    /// Reports a value that does not fit what it is assigned to: many-valued targets take
+    /// elements and collections of them (`+=` adds them), single-valued ones a single value.
+    fn check_assignment(&mut self, target: &Type, value: &Type, add: bool, span: Span) {
+        let mm = self.mm;
+        let fits = match target {
+            Type::Collection(_, elem) => {
+                value.conforms_to(elem, mm) || value.element().is_some_and(|v| v.conforms_to(elem, mm))
+            }
+            Type::String if add => value.conforms_to(&Type::String, mm),
+            t => value.conforms_to(t, mm),
+        };
+        if fits || value.is_error() || target.is_error() {
+            return;
+        }
+        let msg = format!("a value of type {} cannot be assigned to {}", self.show(value), self.show(target));
+        // OclAny may well hold a fitting value: the evaluator checks it.
+        if *value == Type::OclAny || value.element() == Some(&Type::OclAny) {
+            self.report_warning(span, msg);
+        } else {
+            self.error(span, msg);
+        }
+    }
+
+    /// The class objects of type `t` are created of; reports types that cannot be created
+    /// (`default_extent`: in the model the host chooses).
+    fn creatable(&mut self, t: &Type, span: Span, default_extent: bool) -> Option<ClassifierId> {
+        match t {
+            Type::Classifier(c) if self.mm.is_class(*c) => {
+                let data = self.mm.class_data(*c);
+                if data.is_some_and(|d| d.is_abstract || d.is_interface) {
+                    let msg = format!("{} is abstract: its objects cannot be created", self.mm.classifier(*c).name);
+                    self.error(span, msg);
+                }
+                if default_extent && let Some(Err(msg)) = self.host.map(|h| h.can_create(self.mm, *c)) {
+                    self.error(span, msg);
+                }
+                Some(*c)
+            }
+            Type::Error => None,
+            other => {
+                let msg = format!("only objects of classes can be created, not of {}", self.show(other));
+                self.error(span, msg);
+                None
+            }
+        }
+    }
+
+    fn check_extent(&mut self, extent: &Ident, class: Option<ClassifierId>) {
+        if let Some(Err(msg)) = self.host.map(|h| h.extent(&extent.name, class)) {
+            self.error(extent.span, msg);
         }
     }
 }

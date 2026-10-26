@@ -1,0 +1,69 @@
+/*
+ * Class diagrams to relational schemas, in QVT Operational Mappings: a schema per package,
+ * a table per persistent class with a primary key column, a column per attribute of a
+ * primitive type, and a foreign key per attribute typed by a persistent class.
+ * uml2rdbms.qvtr is the same transformation in QVT Relations.
+ *
+ *   oxy qvt uml2rdbms.qvto -e uml.oclinecore -e rdbms.oclinecore --in source=company.hutn
+ */
+modeltype UML uses 'http://www.example.org/qvt/uml';
+modeltype RDBMS uses 'http://www.example.org/qvt/rdbms';
+
+transformation uml2rdbms(in source : UML, out target : RDBMS);
+
+main() {
+	source.rootObjects()[UML::Package]->map packageToSchema();
+}
+
+mapping UML::Package::packageToSchema() : RDBMS::Schema {
+	name := self.name;
+	tables := self.elements[UML::Class]->map classToTable();
+}
+
+mapping UML::Class::classToTable() : RDBMS::Table
+	when { self.persistent }
+{
+	init {
+		var id := object RDBMS::Column {
+			name := self.name + '_tid';
+			type := 'NUMBER';
+		};
+	}
+	name := self.name;
+	columns += id;
+	keys += self.map classToKey(id);
+	columns += self.attributes[type.oclIsKindOf(UML::PrimitiveType)]->map attributeToColumn();
+	foreignKeys := self.attributes->map attributeToForeignKey();
+	end {
+		result.columns += result.foreignKeys.columns;
+	}
+}
+
+mapping UML::Class::classToKey(id : RDBMS::Column) : RDBMS::Key {
+	name := self.name + '_pk';
+	columns += id;
+}
+
+mapping UML::Attribute::attributeToColumn() : RDBMS::Column {
+	name := self.name;
+	type := sqlType(self.type.name);
+}
+
+-- Only attributes typed by persistent classes get a foreign key; the key it refers to is
+-- created when the referenced class is mapped, maybe later: hence `late`.
+mapping UML::Attribute::attributeToForeignKey() : RDBMS::ForeignKey
+	when { self.type.oclIsKindOf(UML::Class) and self.type.oclAsType(UML::Class).persistent }
+{
+	name := self.name + '_fk';
+	columns += object RDBMS::Column {
+		name := self.name + '_tid';
+		type := 'NUMBER';
+	};
+	refersTo := self.type.late resolveoneIn(UML::Class::classToKey, RDBMS::Key);
+}
+
+query sqlType(primitiveType : String) : String {
+	return if primitiveType = 'Integer' then 'NUMBER'
+		elif primitiveType = 'Boolean' then 'BOOLEAN'
+		else 'VARCHAR' endif;
+}

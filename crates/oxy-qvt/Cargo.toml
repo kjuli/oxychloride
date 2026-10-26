@@ -1,0 +1,11 @@
+[package]
+name = "oxy-qvt"
+description = "QVT model transformations over Ecore models: Operational Mappings (QVTo) and Relations (QVTr)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-ecore.workspace = true
+oxy-ocl.workspace = true
+stacker.workspace = true

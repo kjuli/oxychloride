@@ -9,8 +9,8 @@
 //! * [`protocol`] — the serializable request/response types.
 //!
 //! The lower layers are re-exported as [`ecore`] (metamodels and models), [`ocl`]
-//! (parser, type checker, evaluator), [`henshin`] (graph transformations) and
-//! [`codegen`] (code generation).
+//! (parser, type checker, evaluator), [`henshin`] (graph transformations), [`qvt`] (QVT
+//! model transformations) and [`codegen`] (code generation).
 //!
 //! ```
 //! use oxychloride::{Workspace, ValidateOptions};
@@ -40,6 +40,7 @@ mod editor;
 mod generate;
 mod henshin_documents;
 pub mod protocol;
+mod qvt_documents;
 mod registry;
 pub mod rpc;
 mod textdiff;
@@ -52,6 +53,7 @@ pub use oxy_codegen as codegen;
 pub use oxy_ecore as ecore;
 pub use oxy_henshin as henshin;
 pub use oxy_ocl as ocl;
+pub use oxy_qvt as qvt;
 pub use protocol::*;
 pub use transform::ExploreRequest;
 pub use workspace::{Compiled, Error, ValidateOptions, Workspace};

@@ -343,7 +343,12 @@ impl Workspace {
             let load = match doc.language {
                 Language::Hutn => hutn::load(&doc.text, name, &self.mm, &mut model),
                 Language::Xmi => load_xmi_document(&doc.text, name, &self.mm, &mut model),
-                Language::Ocl | Language::OclInEcore | Language::Henshin | Language::HenshinModel => continue,
+                Language::Ocl
+                | Language::OclInEcore
+                | Language::Henshin
+                | Language::HenshinModel
+                | Language::Qvto
+                | Language::Qvtr => continue,
             };
             for o in &load.objects {
                 locations.insert(o.object, (name.clone(), o.span.clone()));
@@ -559,7 +564,7 @@ impl Workspace {
             match l {
                 Language::OclInEcore => self.mm_dirty = true,
                 Language::Hutn | Language::Xmi => self.models_dirty = true,
-                Language::Ocl | Language::Henshin | Language::HenshinModel => {}
+                Language::Ocl | Language::Henshin | Language::HenshinModel | Language::Qvto | Language::Qvtr => {}
             }
         }
     }
@@ -589,7 +594,8 @@ impl Workspace {
     fn resolve_document_imports(&mut self, name: &str) {
         let Some(doc) = self.documents.get(name) else { return };
         let text = doc.text.clone();
-        let (diagnostics, depends_on) = match doc.language {
+        let language = doc.language;
+        let (diagnostics, depends_on) = match language {
             Language::Ocl => {
                 let (parsed, _) = parse_document(&text);
                 self.resolve_imports(name, &parsed.imports)
@@ -605,6 +611,10 @@ impl Workspace {
             }
             Language::Xmi => {
                 self.load_schema_locations(name, &text);
+                (Vec::new(), Vec::new())
+            }
+            Language::Qvto | Language::Qvtr => {
+                self.load_qvt_imports(name, &text, language);
                 (Vec::new(), Vec::new())
             }
         };
@@ -753,6 +763,8 @@ impl Workspace {
                 out.extend(self.model_document_diagnostics(name, &compiled));
             } else if doc.language.is_transformation() {
                 out.extend(self.henshin_diagnostics(name));
+            } else if doc.language.is_qvt() {
+                out.extend(self.qvt_diagnostics(name, &compiled));
             } else if let Some(src) = compiled.source_of(name) {
                 let source = compiled.env.source(src);
                 out.extend(doc.import_diagnostics.iter().map(|d| convert_diagnostic(source, d)));
@@ -1129,6 +1141,7 @@ impl Workspace {
                 "tuple": parts.iter().map(|(n, v)| (n.to_string(), self.value_to_json(v))).collect::<serde_json::Map<_, _>>(),
             }),
             Value::Type(t) => json!({ "type": t.display(&self.mm).to_string() }),
+            Value::Model(m) => json!({ "model": &**m }),
         }
     }
 
@@ -1200,6 +1213,7 @@ impl Workspace {
             Language::Ocl => Err(Error::Invalid("Complete OCL documents cannot be exported".into())),
             Language::Henshin | Language::HenshinModel => self.convert_transformation(name, target),
             Language::Xmi => Err(Error::Invalid("XMI documents are XMI already".into())),
+            Language::Qvto | Language::Qvtr => Err(Error::Invalid("QVT transformations cannot be exported".into())),
         }
     }
 
@@ -1241,7 +1255,7 @@ impl Workspace {
                 Ok(hutn::write(&mm, &model, load.resource))
             }
             Language::Henshin | Language::HenshinModel => self.convert_transformation_file(path, to),
-            Language::Ocl | Language::Xmi => {
+            Language::Ocl | Language::Xmi | Language::Qvto | Language::Qvtr => {
                 Err(Error::Invalid(format!("files cannot be converted to {}", to.extension())))
             }
         }

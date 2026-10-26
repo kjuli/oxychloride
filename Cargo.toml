@@ -4,6 +4,7 @@ members = [
     "crates/oxy-ecore",
     "crates/oxy-ocl",
     "crates/oxy-henshin",
+    "crates/oxy-qvt",
     "crates/oxy-codegen",
     "crates/oxychloride",
     "crates/oxy-cli",
@@ -21,6 +22,7 @@ rust-version = "1.85"
 oxy-ecore = { path = "crates/oxy-ecore" }
 oxy-ocl = { path = "crates/oxy-ocl" }
 oxy-henshin = { path = "crates/oxy-henshin" }
+oxy-qvt = { path = "crates/oxy-qvt" }
 oxy-codegen = { path = "crates/oxy-codegen" }
 oxychloride = { path = "crates/oxychloride" }
 oxy-lsp = { path = "crates/oxy-lsp" }
@@ -30,3 +32,4 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4.6", features = ["derive"] }
+stacker = "0.1"
