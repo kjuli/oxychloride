@@ -1,0 +1,22 @@
+/*
+ * SQL types and key columns for transformations to relational schemas: a QVTo library,
+ * which uml2rdbms.qvto imports with `import sql.Types;` (the unit sql/Types.qvto next to it).
+ */
+library Types;
+
+modeltype RDBMS uses 'http://www.example.org/qvt/rdbms';
+
+-- The SQL type of a primitive type of the class diagram.
+query sqlType(primitiveType : String) : String {
+	return if primitiveType = 'Integer' then 'NUMBER'
+		elif primitiveType = 'Boolean' then 'BOOLEAN'
+		else 'VARCHAR' endif;
+}
+
+-- A column that identifies the rows of the table of a class: `<class>_tid`.
+helper idColumn(className : String) : RDBMS::Column {
+	return object RDBMS::Column {
+		name := className + '_tid';
+		type := 'NUMBER';
+	};
+}

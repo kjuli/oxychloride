@@ -7,11 +7,14 @@
 //! features. It changes neither metamodels nor models: diagnostics, hovers and completion
 //! come from compiling it, and `runQvt` runs it on a copy of the workspace's models and
 //! returns the models it produced or changed as text, without writing files.
+//!
+//! A QVTo document's imports (`import a.b.Lib;`) name units `a/b/Lib.qvto` next to the
+//! document or in a folder above it — open documents first, else files.
 
 use std::path::Path;
 
 use oxy_ecore::{Metamodel, Model, ObjectId, PackageId, hutn, xmi_writer};
-use oxy_qvt::{Binding, Compiled, Direction, RunOptions};
+use oxy_qvt::{Binding, Compiled, Direction, RunOptions, Unit};
 
 use crate::protocol::*;
 use crate::workspace::{Compiled as OclCompiled, Error, Workspace};
@@ -76,10 +79,42 @@ impl Workspace {
         Vec::new()
     }
 
-    /// Loads the `.ecore` files a QVT document's model types or imports name and that are not
-    /// loaded yet (problems show up as the document's diagnostics).
+    /// The unit a QVTo document (or a unit it imports, `from`) imports by `name`: an open
+    /// document, else a file.
+    fn qvt_unit(&self, document: &str, from: Option<&str>, name: &[String]) -> Option<Unit> {
+        let from = Path::new(from.unwrap_or(document));
+        for candidate in oxy_qvt::unit_candidates(from, name) {
+            let canonical = std::fs::canonicalize(&candidate).ok();
+            let open = self.document_names().find(|d| {
+                Path::new(d) == candidate
+                    || canonical.as_deref().is_some_and(|c| std::fs::canonicalize(d).ok().as_deref() == Some(c))
+            });
+            if let Some(d) = open
+                && let Some(text) = self.document_text(d)
+            {
+                return Some(Unit { path: d.to_string(), text: text.to_string() });
+            }
+            if let Ok(text) = std::fs::read_to_string(&candidate) {
+                return Some(Unit { path: candidate.to_string_lossy().into_owned(), text });
+            }
+        }
+        None
+    }
+
+    /// Loads the `.ecore` files a QVT document's model types or imports name (also those of the
+    /// units a QVTo document imports) and that are not loaded yet (problems show up as the
+    /// document's diagnostics).
     pub(crate) fn load_qvt_imports(&mut self, name: &str, text: &str, language: Language) {
-        for uri in named_uris(text, language) {
+        let mut named: Vec<(String, String)> =
+            named_uris(text, language).into_iter().map(|u| (name.to_string(), u)).collect();
+        if language == Language::Qvto {
+            let units = oxy_qvt::imported_units(text, &|from, n| self.qvt_unit(name, from, n));
+            for u in units {
+                named.extend(named_uris(&u.text, language).into_iter().map(|uri| (u.path.clone(), uri)));
+            }
+        }
+        for (name, uri) in named {
+            let name = name.as_str();
             if !self.qvt_packages(name, &uri).is_empty() {
                 continue;
             }
@@ -103,7 +138,8 @@ impl Workspace {
             .and_then(qvt_language)
             .ok_or_else(|| Error::Invalid(format!("'{name}' is not a QVT document")))?;
         let lookup = |uri: &str| self.qvt_packages(name, uri);
-        Ok(oxy_qvt::compile(language, self.metamodel(), &ocl.env, text, &lookup))
+        let units = |from: Option<&str>, n: &[String]| self.qvt_unit(name, from, n);
+        Ok(oxy_qvt::compile_with_imports(language, self.metamodel(), &ocl.env, text, &lookup, &units))
     }
 
     /// The diagnostics of an open QVT document.
@@ -148,6 +184,10 @@ impl Workspace {
         for name in self.document_names() {
             let Some(language) = self.document_language(name).filter(|l| l.is_qvt()) else { continue };
             let compiled = self.compile_qvt(name, &ocl)?;
+            // Libraries are run through the transformations that import them.
+            if compiled.library {
+                continue;
+            }
             let applicable = match &packages {
                 Some(used) if !used.is_empty() => compiled
                     .parameters
@@ -256,12 +296,23 @@ impl Workspace {
         out.problems = result
             .problems
             .iter()
-            .map(|p| Diagnostic {
-                severity: Severity::Error,
-                message: p.message.clone(),
-                source: name.to_string(),
-                origin: Origin::Document { name: name.to_string() },
-                range: p.span.map(|s| self.document_range(name, &s.range())).unwrap_or_default(),
+            .map(|p| {
+                // A problem in an imported unit: in its file.
+                let file = p.unit.as_deref().unwrap_or(name);
+                let range = match (p.span, &p.unit) {
+                    (Some(s), Some(unit)) if self.document_text(unit).is_none() => {
+                        std::fs::read_to_string(unit).map(|text| self.text_range(&text, &s.range())).unwrap_or_default()
+                    }
+                    (Some(s), _) => self.document_range(file, &s.range()),
+                    (None, _) => Range::default(),
+                };
+                Diagnostic {
+                    severity: Severity::Error,
+                    message: p.message.clone(),
+                    source: file.to_string(),
+                    origin: Origin::Document { name: file.to_string() },
+                    range,
+                }
             })
             .collect();
         if !request.check {

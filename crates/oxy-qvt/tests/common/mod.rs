@@ -57,6 +57,34 @@ impl Fixture {
         oxy_qvt::compile(language, mm, &self.env, text, &|uri| oxy_qvt::packages_of_uri(mm, uri))
     }
 
+    /// Compiles a document of `examples/qvt`, with the units it imports from there.
+    pub fn compile_example(&self, language: Language, file: &str) -> Compiled {
+        let mm = &self.mm;
+        let path = example(file);
+        let units = |from: Option<&str>, name: &[String]| oxy_qvt::find_unit(&path, from, name);
+        let text = read(file);
+        oxy_qvt::compile_with_imports(language, mm, &self.env, &text, &|uri| oxy_qvt::packages_of_uri(mm, uri), &units)
+    }
+
+    /// Compiles a QVTo document that imports units: `units` are their qualified names
+    /// (`lib.Naming`, the file `lib/Naming.qvto`) and texts.
+    pub fn compile_with_units(&self, text: &str, units: &[(&str, &str)]) -> Compiled {
+        let mm = &self.mm;
+        let lookup = |_: Option<&str>, name: &[String]| {
+            let name = name.join(".");
+            let (n, text) = units.iter().find(|(n, _)| *n == name)?;
+            Some(oxy_qvt::Unit { path: format!("{}.qvto", n.replace('.', "/")), text: text.to_string() })
+        };
+        oxy_qvt::compile_with_imports(
+            Language::Operational,
+            mm,
+            &self.env,
+            text,
+            &|uri| oxy_qvt::packages_of_uri(mm, uri),
+            &lookup,
+        )
+    }
+
     /// Runs a transformation from `source` into a new resource bound to `target`.
     pub fn run(&mut self, compiled: &Compiled, options: &RunOptions) -> (RunResult, usize) {
         let out = self.model.add_resource("out.xmi");

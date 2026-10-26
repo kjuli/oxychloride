@@ -148,6 +148,13 @@ impl<'a> Checker<'a> {
     pub fn resolve_type(&mut self, te: &TypeExpr) -> Type {
         let mut diags = Vec::new();
         let t = resolve_type_in(self.mm, self.package, self.aliases, te, &mut diags);
+        // Types of the language (QVTo: transformations) for names that are no classifiers.
+        if !diags.is_empty()
+            && let TypeExprKind::Path(path) = &te.kind
+            && let Some(t) = self.host.and_then(|h| h.named_type(path))
+        {
+            return t;
+        }
         self.diags.extend(diags);
         t
     }
@@ -1211,13 +1218,23 @@ impl Checker<'_> {
                 t
             }
             ExprKind::New { ty, extent, args } => {
+                let arg_types: Vec<Type> = args.iter().map(|a| self.check(a)).collect();
+                if extent.is_none()
+                    && let Some(h) = self.host
+                {
+                    match h.instantiate(mm, ty, &arg_types) {
+                        Some(Ok(t)) => return t,
+                        Some(Err(msg)) => {
+                            self.error(e.span, msg);
+                            return Type::Error;
+                        }
+                        None => {}
+                    }
+                }
                 let t = self.resolve_type(ty);
                 let class = self.creatable(&t, ty.span, extent.is_none());
                 if let Some(x) = extent {
                     self.check_extent(x, class);
-                }
-                for a in args {
-                    self.check(a);
                 }
                 if !args.is_empty() {
                     self.error(e.span, "constructors with arguments are not supported");

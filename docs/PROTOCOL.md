@@ -273,10 +273,10 @@ The edits that make `target` — the Henshin document of the other syntax, whose
 
 ## QVT transformations
 
-QVT Operational Mappings (`.qvto`) and QVT Relations (`.qvtr`) documents, see [QVT.md](QVT.md). Their diagnostics, hovers and completion are those of the other documents; their model types and imports name metamodels by nsURI, by a URI of the package registry, or by a file relative to the document (loaded when it is opened). They change neither metamodels nor models.
+QVT Operational Mappings (`.qvto`) and QVT Relations (`.qvtr`) documents, see [QVT.md](QVT.md). Their diagnostics, hovers and completion are those of the other documents; their model types and imports name metamodels by nsURI, by a URI of the package registry, or by a file relative to the document (loaded when it is opened). A QVTo document's imports (`import a.b.Lib;`) are found as `a/b/Lib.qvto` next to the document or in a folder above it (an open document first, else the file); errors of an imported unit are diagnostics at the import. They change neither metamodels nor models.
 
 ### `qvtTransformations` `{model?}` → `{transformations: [QvtTransformationInfo]}`
-The QVT transformations of the open documents. With `model` (a model resource, as `models` names it), `applicable` lists the parameters it can be bound to: those whose metamodel has the packages of all its objects.
+The QVT transformations of the open documents (not QVTo libraries, which run as part of the transformations that import them). With `model` (a model resource, as `models` names it), `applicable` lists the parameters it can be bound to: those whose metamodel has the packages of all its objects.
 ```ts
 type QvtTransformationInfo = {
   document: string; language: "qvto" | "qvtr"; name: string;
@@ -293,7 +293,7 @@ Runs a transformation on copies of the workspace's models (the workspace is not 
 type QvtRunResult = {
   outputs: { parameter; path; format: "xmi" | "hutn"; text; objects: number }[];  // the out and inout models (not in check mode)
   log: string[];                 // log(...) and failed assertions
-  problems: Diagnostic[];        // met while running, located in the transformation
+  problems: Diagnostic[];        // met while running, located in the transformation (or the imported unit: `source`)
   violations: string[];          // QVTr check mode: "relation R does not hold for x = …"
   invariants: string[];          // invariants the outputs violate
   applications: number;          // mappings (QVTo) or relations (QVTr) applied

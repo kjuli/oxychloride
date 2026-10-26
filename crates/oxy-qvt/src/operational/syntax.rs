@@ -1,6 +1,6 @@
 //! The syntax of QVT Operational Mappings (`.qvto`), after Eclipse QVTo's grammar
-//! (`QVTOParser.gi`): model types, a transformation header, and mappings, helpers, queries,
-//! `main` and properties — at the top level or in the braces of the transformation.
+//! (`QVTOParser.gi`): imports, model types, a transformation or library header, and mappings,
+//! helpers, queries, `main` and properties — at the top level or in the braces of the module.
 //!
 //! The expressions are OCL with Imperative OCL, parsed by the OCL parser's QVT dialect on the
 //! same token stream, so all spans are offsets into the document. Like the other parsers of
@@ -13,14 +13,64 @@ use oxy_ocl::syntax::ast::{Expr, Ident, TypeExpr};
 use oxy_ocl::syntax::lexer::{Keyword, TokenKind};
 use oxy_ocl::syntax::{Dialect, Parser};
 
-/// A `.qvto` document.
+/// A `.qvto` document (a compilation unit).
 #[derive(Clone, Debug, Default)]
 pub struct Document {
     pub modeltypes: Vec<ModelType>,
+    /// The transformation or library the document defines.
     pub transformation: Option<Header>,
     pub elements: Vec<Element>,
-    /// `import` statements (other transformations and libraries are not supported).
-    pub imports: Vec<Span>,
+    /// The units the document imports.
+    pub imports: Vec<Import>,
+}
+
+/// `import a.b.c;` (also `import library c;` and `from a.b.c import x;`): the unit
+/// `a/b/c.qvto`.
+#[derive(Clone, Debug)]
+pub struct Import {
+    pub path: Vec<Ident>,
+    pub span: Span,
+}
+
+impl Import {
+    /// The qualified name, `a.b.c`.
+    pub fn name(&self) -> String {
+        self.path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(".")
+    }
+}
+
+/// What a document defines.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ModuleKind {
+    Transformation,
+    /// A library: helpers, mappings and properties for other modules, without `main`.
+    Library,
+}
+
+/// How a module uses another one.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum UsageKind {
+    /// `access`: its operations can be called.
+    Access,
+    /// `extends`: its operations become the module's own (and can be overridden by it).
+    Extends,
+}
+
+/// `extends transformation T(...)` or `access library L`.
+#[derive(Clone, Debug)]
+pub struct ModuleUsage {
+    pub kind: UsageKind,
+    /// `library` or `transformation`, if written.
+    pub module_kind: Option<ModuleKind>,
+    /// The module's name, possibly qualified (`a::b::L`): the last part names it.
+    pub path: Vec<Ident>,
+    pub span: Span,
+}
+
+impl ModuleUsage {
+    pub fn name(&self) -> &Ident {
+        self.path.last().expect("a usage names a module")
+    }
 }
 
 /// `modeltype UML uses 'http://...';`
@@ -42,13 +92,15 @@ pub struct PackageRef {
     pub span: Span,
 }
 
-/// `transformation Name(in uml : UML, out rdb : RDB)`.
+/// `transformation Name(in uml : UML, out rdb : RDB)` or `library Name(UML)`, with the
+/// modules it extends or accesses.
 #[derive(Clone, Debug)]
 pub struct Header {
+    pub kind: ModuleKind,
     pub name: Ident,
+    /// The model parameters (of a library: just the model types it works on).
     pub params: Vec<ModelParam>,
-    /// `extends` and `access` (not supported).
-    pub uses: Vec<Ident>,
+    pub uses: Vec<ModuleUsage>,
     pub span: Span,
 }
 
@@ -188,6 +240,7 @@ const ELEMENT_WORDS: &[&str] = &[
     "transformation",
     "library",
     "import",
+    "from",
     "abstract",
     "blackbox",
     "static",
@@ -198,7 +251,12 @@ const ELEMENT_WORDS: &[&str] = &[
 
 /// Parses a `.qvto` document.
 pub fn parse(src: &str) -> (Document, Vec<Diagnostic>) {
-    let mut p = QvtoParser { p: Parser::with_dialect(src, Dialect::Qvt) };
+    parse_at(src, 0)
+}
+
+/// Parses a `.qvto` document whose spans start at `offset` (an imported unit).
+pub fn parse_at(src: &str, offset: u32) -> (Document, Vec<Diagnostic>) {
+    let mut p = QvtoParser { p: Parser::with_offset(src, Dialect::Qvt, offset) };
     let doc = p.document();
     (doc, p.p.into_diagnostics())
 }
@@ -279,23 +337,38 @@ impl QvtoParser {
             }
         };
         match word.as_str() {
-            "import" => {
+            "import" | "from" => {
                 self.p.bump();
-                while !self.p.at_eof() && !self.p.at(&TokenKind::Semi) && !self.at_element() {
+                // `import library L;` (old style).
+                if word == "import" && self.p.at_word("library") && matches!(self.p.peek_at(1), TokenKind::Ident(_)) {
                     self.p.bump();
                 }
-                self.p.eat(&TokenKind::Semi);
-                doc.imports.push(start.to(self.p.prev_span()));
+                let path = self.qualified_name("a unit to import");
+                if word == "from" {
+                    // `from a.b import x, y;` or `import *`: the unit's elements.
+                    self.p.expect_word("import", "after the unit");
+                    if !self.p.eat(&TokenKind::Star) {
+                        loop {
+                            self.p.ident("a name to import");
+                            if !self.p.eat(&TokenKind::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                self.p.expect(&TokenKind::Semi, "after the import");
+                doc.imports.push(Import { path, span: start.to(self.p.prev_span()) });
             }
             "modeltype" | "metamodel" if top => {
                 let m = self.modeltype();
                 doc.modeltypes.push(m);
             }
-            "transformation" if top => {
+            "transformation" | "library" if top => {
                 if doc.transformation.is_some() {
-                    self.p.error(start, "only one transformation per document is supported");
+                    self.p.error(start, "only one transformation or library per document is supported");
                 }
-                let header = self.header(start);
+                let kind = if word == "library" { ModuleKind::Library } else { ModuleKind::Transformation };
+                let header = self.header(start, kind);
                 let braced = self.p.at(&TokenKind::LBrace);
                 if doc.transformation.is_none() {
                     doc.transformation = Some(header);
@@ -305,7 +378,7 @@ impl QvtoParser {
                     loop {
                         while self.p.eat(&TokenKind::Semi) {}
                         if self.p.at_eof() {
-                            self.p.error(start, "missing '}' at the end of the transformation");
+                            self.p.error(start, format!("missing '}}' at the end of the {word}"));
                             break;
                         }
                         if self.p.eat(&TokenKind::RBrace) {
@@ -314,15 +387,7 @@ impl QvtoParser {
                         self.element(doc, false);
                     }
                 } else {
-                    self.p.expect(&TokenKind::Semi, "after the transformation's signature");
-                }
-            }
-            "library" => {
-                self.p.bump();
-                self.p.error(start, "libraries are not supported");
-                self.recover();
-                if self.p.at(&TokenKind::RBrace) {
-                    self.p.bump();
+                    self.p.expect(&TokenKind::Semi, &format!("after the {word}'s signature"));
                 }
             }
             "mapping" => {
@@ -339,7 +404,12 @@ impl QvtoParser {
                 let params = if self.p.at(&TokenKind::RParen) { Vec::new() } else { self.params() };
                 self.p.expect(&TokenKind::RParen, "to close the parameters of 'main'");
                 let block_start = self.p.span();
-                let body = self.p.braced_statements("the body of 'main'");
+                // `main();`: a declaration (of an empty `main`).
+                let body = if self.p.eat(&TokenKind::Semi) {
+                    Vec::new()
+                } else {
+                    self.p.braced_statements("the body of 'main'")
+                };
                 let block = block_start.to(self.p.prev_span());
                 doc.elements.push(Element::Main(Main { params, body, block, span: start.to(self.p.prev_span()) }));
             }
@@ -369,7 +439,7 @@ impl QvtoParser {
                 self.p.error(start, format!("'{word}' is not supported"));
                 self.skip_definition();
             }
-            "modeltype" | "metamodel" | "transformation" => {
+            "modeltype" | "metamodel" | "transformation" | "library" => {
                 self.p.error(start, format!("'{word}' must be at the top of the document"));
                 self.p.bump();
                 self.recover();
@@ -464,11 +534,21 @@ impl QvtoParser {
         ModelType { name, compliance, packages, span: start.to(self.p.prev_span()) }
     }
 
-    fn header(&mut self, start: Span) -> Header {
+    /// A name qualified with `.` or `::` (`a.b.c`, `a::b::c`).
+    fn qualified_name(&mut self, what: &str) -> Vec<Ident> {
+        let mut path = vec![self.p.ident(what)];
+        while self.p.eat(&TokenKind::Dot) || self.p.eat(&TokenKind::ColonColon) {
+            path.push(self.p.ident(what));
+        }
+        path
+    }
+
+    fn header(&mut self, start: Span, kind: ModuleKind) -> Header {
         self.p.bump();
-        let mut name = self.p.ident("the transformation's name");
+        let what = if kind == ModuleKind::Library { "the library's name" } else { "the transformation's name" };
+        let mut name = self.p.ident(what);
         while self.p.eat(&TokenKind::Dot) {
-            name = self.p.ident("the transformation's name");
+            name = self.p.ident(what);
         }
         let mut params = Vec::new();
         if self.p.eat(&TokenKind::LParen) {
@@ -489,16 +569,29 @@ impl QvtoParser {
                     }
                 }
             }
-            self.p.expect(&TokenKind::RParen, "to close the transformation's parameters");
+            self.p.expect(&TokenKind::RParen, "to close the parameters");
         }
         let mut uses = Vec::new();
         while self.p.at_word("extends") || self.p.at_word("access") || self.p.at_word("refines") {
+            let usage = if self.p.at_word("extends") {
+                Some(UsageKind::Extends)
+            } else if self.p.at_word("access") {
+                Some(UsageKind::Access)
+            } else {
+                None
+            };
             let s = self.p.bump().span;
-            if self.p.at_word("transformation") || self.p.at_word("library") {
-                self.p.bump();
-            }
             loop {
-                uses.push(self.p.ident("a transformation or library"));
+                let item = self.p.span();
+                let module_kind = if self.p.eat_word("transformation") {
+                    Some(ModuleKind::Transformation)
+                } else if self.p.eat_word("library") {
+                    Some(ModuleKind::Library)
+                } else {
+                    None
+                };
+                let path = self.qualified_name("a transformation or library");
+                // The model types it is used with: `T(in m : MM)` (not needed to find it).
                 if self.p.eat(&TokenKind::LParen) {
                     let mut depth = 0usize;
                     while !self.p.at_eof() {
@@ -510,13 +603,18 @@ impl QvtoParser {
                         }
                     }
                 }
+                if let Some(kind) = usage {
+                    uses.push(ModuleUsage { kind, module_kind, path, span: item.to(self.p.prev_span()) });
+                }
                 if !self.p.eat(&TokenKind::Comma) {
                     break;
                 }
             }
-            self.p.error(s.to(self.p.prev_span()), "extending or accessing other transformations is not supported");
+            if usage.is_none() {
+                self.p.error(s.to(self.p.prev_span()), "'refines' is not supported");
+            }
         }
-        Header { name, params, uses, span: start.to(self.p.prev_span()) }
+        Header { kind, name, params, uses, span: start.to(self.p.prev_span()) }
     }
 
     fn direction(&mut self) -> Option<Direction> {

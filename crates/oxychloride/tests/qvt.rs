@@ -134,6 +134,46 @@ fn problems_of_runs_and_documents() {
 }
 
 #[test]
+fn imported_libraries() {
+    // `uml2rdbms.qvto` imports `sql.Types` from the file next to it (`workspace` checks that it
+    // has no errors); libraries are no transformations to run.
+    let mut ws = workspace();
+    let library = path("sql/Types.qvto");
+    let d = open(&mut ws, "sql/Types.qvto");
+    assert!(d.iter().all(|d| d.severity != Severity::Error), "{d:#?}");
+    let names: Vec<String> = ws.qvt_transformations(None).unwrap().into_iter().map(|t| t.name).collect();
+    assert_eq!(names, vec!["uml2rdbms", "uml2rdbms"]);
+    let e = ws.run_qvt(&QvtRunRequest { document: library.clone(), ..QvtRunRequest::default() }).unwrap_err();
+    assert!(e.to_string().contains("is a library"), "{e}");
+
+    // The open document is imported, not the file: its errors are reported at the import.
+    let text = std::fs::read_to_string(&library).unwrap();
+    ws.open_document(&library, &text.replace("'NUMBER';", "3;"));
+    let d = ws.diagnostics(Some(&path("uml2rdbms.qvto")));
+    let error = d.iter().find(|d| d.severity == Severity::Error).expect("an error at the import");
+    assert!(
+        error.message.contains("the imported unit has errors") && error.message.contains("Types.qvto:20"),
+        "{d:#?}"
+    );
+    assert_eq!(error.range.start.line, 9);
+
+    // Problems while running the library's code are located in the library.
+    ws.open_document(&library, &text.replace("className + '_tid'", "className.substring(5, 1)"));
+    let result = ws.run_qvt(&request("uml2rdbms.qvto")).unwrap();
+    let p = result.problems.iter().find(|p| p.source == library).expect("a problem in the library");
+    assert_eq!(p.range.start.line, 18, "{p:#?}");
+
+    // Hover and completion know the library's operations.
+    let qvto = path("uml2rdbms.qvto");
+    let source = std::fs::read_to_string(&qvto).unwrap();
+    let offset = source.find("idColumn(self.name)").unwrap() + 2;
+    let line = source[..offset].matches('\n').count() as u32;
+    let column = source[..offset].rsplit('\n').next().unwrap().chars().count() as u32;
+    let hover = ws.hover(&qvto, Position { line, column }).unwrap();
+    assert!(hover.contents.contains("helper idColumn(className : String) : Column"), "{}", hover.contents);
+}
+
+#[test]
 fn model_types_are_found_through_the_package_registry() {
     let mut ws = Workspace::new();
     ws.set_registry(vec![RegistryEntry { uri: "urn:shop".into(), location: format!("{REGISTRY}/lib/shop.ecore") }]);

@@ -506,6 +506,14 @@ describe("Oxychloride", () => {
     const completions = await vscode.commands.executeCommand<vscode.CompletionList>("vscode.executeCompletionItemProvider", uri, at);
     const labels = completions.items.map((i) => (typeof i.label === "string" ? i.label : i.label.label));
     assert.ok(labels.includes("persistent") && labels.includes("attributes"), labels.join(", "));
+    // The library it imports (sql/Types.qvto): its errors show at the import.
+    const library = await vscode.window.showTextDocument(vscode.Uri.file(path.join(folder(), "qvt/sql/Types.qvto")));
+    assert.strictEqual(library.document.languageId, "qvto");
+    const number = library.document.positionAt(library.document.getText().indexOf("'NUMBER';"));
+    await library.edit((e) => e.replace(new vscode.Range(number, number.translate(0, "'NUMBER'".length)), "3"));
+    await waitFor("error at the import", () => errors(uri).some((d) => d.message.includes("the imported unit has errors")));
+    await vscode.commands.executeCommand("undo");
+    await waitFor("no errors", () => errors(uri).length === 0 || undefined);
     const relations = await vscode.workspace.openTextDocument(path.join(folder(), "qvt/uml2rdbms.qvtr"));
     assert.strictEqual(relations.languageId, "qvtr");
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");

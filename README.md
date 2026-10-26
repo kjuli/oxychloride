@@ -172,6 +172,8 @@ $B check examples/university/university.henshin -e examples/university/universit
 **QVT Operational Mappings** (`.qvto`) and **QVT Relations** (`.qvtr`) transform models into other models, as in Eclipse QVTo and Eclipse QVTd (whose grammars the parsers follow). Model types and imports name metamodels by nsURI, by a URI of the package registry, or by a metamodel file next to the transformation:
 
 ```
+import sql.Types;    -- a library: sql/Types.qvto
+
 modeltype UML uses 'http://www.example.org/qvt/uml';
 modeltype RDBMS uses 'http://www.example.org/qvt/rdbms';
 
@@ -194,7 +196,7 @@ mapping UML::Class::classToTable() : RDBMS::Table
 }
 ```
 
-The expressions are OCL — Oxychloride's OCL, extended by Imperative OCL (variables, assignments, loops, `object`, `map`, `resolve`, `log`, `assert`) — so they are type checked like OCL and can use the operation bodies and derived features of the metamodels. A QVT Relations transformation runs in the direction of one of its models: for each binding of the other models' patterns that satisfies a relation's `when` clause, the pattern of the target is matched and, where it does not match, enforced (objects identified by keys are reused); in check mode only the bindings that do not hold are reported. Transformations run on copies of the workspace's models (`runQvt`, `oxy qvt`): the results come back as XMI or HUTN, with what the transformation logged, the problems it met and the invariants the results violate. `examples/qvt` has the same transformation in both languages; they produce the same schema. See [docs/QVT.md](docs/QVT.md) for what is supported.
+The expressions are OCL — Oxychloride's OCL, extended by Imperative OCL (variables, assignments, loops, `object`, `map`, `resolve`, `log`, `assert`) — so they are type checked like OCL and can use the operation bodies and derived features of the metamodels. QVTo transformations import libraries and other transformations (`import a.b.Lib;` names `a/b/Lib.qvto` next to the transformation or in a folder above it), extend them (overriding their operations) and run accessed transformations (`new T(m).transform()`). A QVT Relations transformation runs in the direction of one of its models: for each binding of the other models' patterns that satisfies a relation's `when` clause, the pattern of the target is matched and, where it does not match, enforced (objects identified by keys are reused); in check mode only the bindings that do not hold are reported. Transformations run on copies of the workspace's models (`runQvt`, `oxy qvt`): the results come back as XMI or HUTN, with what the transformation logged, the problems it met and the invariants the results violate. `examples/qvt` has the same transformation in both languages; they produce the same schema. See [docs/QVT.md](docs/QVT.md) for what is supported.
 
 ## VS Code extension
 
@@ -218,7 +220,7 @@ See [vscode/README.md](vscode/README.md). In short: `cargo build -p oxy-cli`, th
 | `examples/library` | Example metamodel with embedded OCL, model (XMI and HUTN), and Complete OCL document |
 | `examples/university` | Example metamodel in OCLinEcore (with pre- and postconditions), model in HUTN, and Henshin transformations (as text and as the equivalent `.henshin` model) |
 | `examples/philosophers` | The dining philosophers: metamodel, model and Henshin rules (text and `.henshin`) for state space exploration |
-| `examples/qvt` | Class diagrams to relational schemas in QVT Operational Mappings and QVT Relations: both metamodels (OCLinEcore), a model (HUTN) |
+| `examples/qvt` | Class diagrams to relational schemas in QVT Operational Mappings (with a library) and QVT Relations: both metamodels (OCLinEcore), a model (HUTN) |
 | `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [code generation](docs/CODEGEN.md), [Henshin](docs/HENSHIN.md) and [QVT](docs/QVT.md) notes |
 
 `cargo build` / `cargo test` cover the engine, the CLI, the C ABI and the language server; the extension is built with npm (see [vscode/README.md](vscode/README.md)).

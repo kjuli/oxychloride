@@ -142,13 +142,16 @@ the `oxy` CLI.
   register a file for the URI), hovers (signatures, the types of expressions) and completion
   (after `.`, `->`, `::` and `map`; variables, features of `self`, mappings, keywords). Model
   types and imports find metamodels by nsURI, through the package registry, or as files next
-  to the transformation. **Run QVT Transformation…** — on a model (`.xmi`, `.hutn`: Explorer,
+  to the transformation. QVTo `import a.b.Lib;` uses the library (or transformation) in
+  `a/b/Lib.qvto` next to the transformation or in a folder above it — its operations are
+  completed and hovered, and its errors show at the import. **Run QVT Transformation…** — on a model (`.xmi`, `.hutn`: Explorer,
   editor, the Models view) it offers the transformations of the workspace that take models of
   its metamodel; on a transformation (Explorer, editor title ▷) it asks for the models of its
   parameters. For QVT Relations it asks for the direction, and whether to create (enforce) the
   target model or only check an existing one. The results are written as XMI (or HUTN, for a
   `.hutn` file name) next to the model and opened; the log goes to the *Oxychloride* output, and
-  problems of the run show on the transformation's lines. See [docs/QVT.md](../docs/QVT.md).
+  problems of the run show on the transformation's lines (or the library's). See
+  [docs/QVT.md](../docs/QVT.md).
 - **File icons** for `.ocl`, `.oclinecore`, `.hutn`, `.henshin_text`, `.qvto` and `.qvtr` files (in file icon themes that show
   language icons, such as the default Seti).
 

@@ -115,7 +115,7 @@ pub struct Evaluator<'a> {
     model: ModelRef<'a>,
     env: &'a Environment,
     host: Option<&'a dyn Host>,
-    aliases: &'a [PackageAlias],
+    aliases: Rc<[PackageAlias]>,
     control: Option<Control>,
     /// Problems of Imperative OCL statements (failed assignments, invalid results).
     errors: Vec<(Span, String)>,
@@ -154,7 +154,7 @@ impl<'a> Evaluator<'a> {
             model,
             env,
             host: None,
-            aliases: &[],
+            aliases: Rc::from(Vec::new()),
             control: None,
             errors: Vec::new(),
             frames: vec![Frame { vars: Vec::new(), implicit: None, operations: true, types: Vec::new() }],
@@ -172,9 +172,15 @@ impl<'a> Evaluator<'a> {
     }
 
     /// Resolves type names with package aliases (QVT's model types).
-    pub fn with_aliases(mut self, aliases: &'a [PackageAlias]) -> Self {
+    pub fn with_aliases(mut self, aliases: Rc<[PackageAlias]>) -> Self {
         self.aliases = aliases;
         self
+    }
+
+    /// Replaces the package aliases (for code of another module, e.g. a QVTo library) and
+    /// returns the previous ones.
+    pub fn set_aliases(&mut self, aliases: Rc<[PackageAlias]>) -> Rc<[PackageAlias]> {
+        std::mem::replace(&mut self.aliases, aliases)
     }
 
     pub fn metamodel(&self) -> &'a Metamodel {
@@ -618,9 +624,12 @@ impl<'a> Evaluator<'a> {
     /// Resolves a type written in an expression (with the package aliases).
     pub fn resolve_type(&self, te: &TypeExpr) -> Result<Type, String> {
         let mut diags = Vec::new();
-        let t = resolve_type_in(self.mm, self.package, self.aliases, te, &mut diags);
+        let t = resolve_type_in(self.mm, self.package, &self.aliases, te, &mut diags);
         match diags.into_iter().next() {
-            Some(d) => Err(d.message),
+            Some(d) => match (&te.kind, self.host) {
+                (TypeExprKind::Path(path), Some(h)) => h.named_type(path).ok_or(d.message),
+                _ => Err(d.message),
+            },
             None => Ok(t),
         }
     }
@@ -653,14 +662,14 @@ impl<'a> Evaluator<'a> {
             if let Some(t) = library_type(name) {
                 return Value::Type(Rc::new(t));
             }
-            if let Ok(c) = lookup_classifier_in(mm, self.package, self.aliases, &[name]) {
+            if let Ok(c) = lookup_classifier_in(mm, self.package, &self.aliases, &[name]) {
                 return Value::Type(Rc::new(Type::of_classifier(mm, c)));
             }
             return Value::invalid(format!("unknown name '{name}'"));
         }
         let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
         let Some((last, head)) = names.split_last() else { return Value::invalid("empty name") };
-        if let Ok(c) = lookup_classifier_in(mm, self.package, self.aliases, head)
+        if let Ok(c) = lookup_classifier_in(mm, self.package, &self.aliases, head)
             && mm.is_enum(c)
         {
             return match mm.enum_literal_index(c, last) {
@@ -668,7 +677,7 @@ impl<'a> Evaluator<'a> {
                 None => Value::invalid(format!("enumeration '{}' has no literal '{last}'", mm.classifier(c).name)),
             };
         }
-        match lookup_classifier_in(mm, self.package, self.aliases, &names) {
+        match lookup_classifier_in(mm, self.package, &self.aliases, &names) {
             Ok(c) => Value::Type(Rc::new(Type::of_classifier(mm, c))),
             Err(e) => Value::invalid(e),
         }
@@ -1660,6 +1669,19 @@ impl Evaluator<'_> {
                 }
                 self.with_implicit(Value::Object(object), |ev| ev.eval_statements(body));
                 Value::Object(object)
+            }
+            ExprKind::New { ty, extent: None, args } if let Some(h) = self.host => {
+                let mut values = Vec::new();
+                for a in args {
+                    values.push(strict!(self.eval(a)));
+                }
+                if let Some(v) = h.instantiate(self, ty, values) {
+                    return v;
+                }
+                match self.create(ty, None) {
+                    Ok(o) => Value::Object(o),
+                    Err(m) => Value::invalid(m),
+                }
             }
             ExprKind::New { ty, extent, .. } => match self.create(ty, extent.as_ref()) {
                 Ok(o) => Value::Object(o),

@@ -448,6 +448,8 @@ pub(crate) fn compile(mm: &Metamodel, env: &Environment, text: &str, lookup: Pac
             scopes: Vec::new(),
             symbols,
             uris,
+            library: false,
+            units: Vec::new(),
             inner: Inner::Relational(Box::new(Transformation {
                 name: String::new(),
                 aliases,
@@ -767,6 +769,8 @@ pub(crate) fn compile(mm: &Metamodel, env: &Environment, text: &str, lookup: Pac
         scopes,
         symbols,
         uris,
+        library: false,
+        units: Vec::new(),
         inner: Inner::Relational(Box::new(t)),
     }
 }

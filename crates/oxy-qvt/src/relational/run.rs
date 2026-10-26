@@ -110,7 +110,7 @@ pub(crate) fn run(
         created: Cell::new(0),
     };
     {
-        let mut ev = Evaluator::new_mut(mm, model, env).with_host(&run).with_aliases(&t.aliases);
+        let mut ev = Evaluator::new_mut(mm, model, env).with_host(&run).with_aliases(t.aliases.as_slice().into());
         let mut rounds = 0;
         loop {
             let before = run.traced();
@@ -132,9 +132,11 @@ pub(crate) fn run(
             }
         }
         let errors = ev.take_errors();
-        run.problems
-            .borrow_mut()
-            .extend(errors.into_iter().map(|(span, message)| RunProblem { span: Some(span), message }));
+        run.problems.borrow_mut().extend(errors.into_iter().map(|(span, message)| RunProblem {
+            span: Some(span),
+            message,
+            unit: None,
+        }));
     }
     Ok(RunResult {
         log: Vec::new(),
@@ -155,7 +157,7 @@ impl Run<'_> {
         let message = message.into();
         let mut problems = self.problems.borrow_mut();
         if !problems.iter().any(|p| p.span == span && p.message == message) {
-            problems.push(RunProblem { span, message });
+            problems.push(RunProblem { span, message, unit: None });
         }
     }
 

@@ -11,6 +11,10 @@ use crate::protocol::*;
 use crate::workspace::Workspace;
 
 const QVTO_KEYWORDS: &[&str] = &[
+    "import",
+    "library",
+    "access",
+    "extends",
     "transformation",
     "modeltype",
     "uses",

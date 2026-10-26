@@ -13,7 +13,7 @@
 use oxy_ecore::{ClassifierId, Metamodel, ObjectId};
 
 use crate::eval::Evaluator;
-use crate::syntax::ast::Ident;
+use crate::syntax::ast::{Ident, TypeExpr};
 use crate::types::Type;
 use crate::value::Value;
 
@@ -63,6 +63,17 @@ pub trait CheckHost {
     /// Checks a model parameter named after `@`, for objects of `class`.
     fn extent(&self, name: &str, _class: Option<ClassifierId>) -> Result<(), String> {
         Err(format!("unknown model parameter '{name}'"))
+    }
+
+    /// The type of `new T(args)` if the language gives `T` a meaning other than a class (a
+    /// QVTo transformation to run); `None` if it does not.
+    fn instantiate(&self, _mm: &Metamodel, _ty: &TypeExpr, _args: &[Type]) -> Option<Result<Type, String>> {
+        None
+    }
+
+    /// A type the language names that is no classifier (QVTo: a transformation, `Status`).
+    fn named_type(&self, _path: &[Ident]) -> Option<Type> {
+        None
     }
 
     /// Whether objects of `class` (`object`, `new`) can be created here without naming the
@@ -139,6 +150,17 @@ pub trait Host {
         _args: Vec<Value>,
     ) -> Value {
         Value::invalid(format!("unknown mapping '{}'", path_text(name)))
+    }
+
+    /// A type the language names (see [`CheckHost::named_type`]).
+    fn named_type(&self, _path: &[Ident]) -> Option<Type> {
+        None
+    }
+
+    /// Evaluates `new T(args)` for a `T` of [`CheckHost::instantiate`]; `None` if `T` is a
+    /// class.
+    fn instantiate(&self, _ev: &mut Evaluator<'_>, _ty: &TypeExpr, _args: Vec<Value>) -> Option<Value> {
+        None
     }
 
     /// Creates an object of `class` (in the model parameter `extent`, or the one the class

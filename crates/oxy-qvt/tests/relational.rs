@@ -34,7 +34,7 @@ fn uml_to_rdbms_means_what_the_operational_one_means() {
     let relational = f.hutn(out);
 
     let mut g = fixture();
-    let c = g.compile(Language::Operational, &read("uml2rdbms.qvto"));
+    let c = g.compile_example(Language::Operational, "uml2rdbms.qvto");
     let (result, out) = g.run(&c, &RunOptions::default());
     assert!(result.problems.is_empty(), "{:#?}", result.problems);
     assert_eq!(relational, g.hutn(out));

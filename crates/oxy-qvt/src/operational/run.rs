@@ -7,9 +7,14 @@
 //! As in Eclipse QVTo, a mapping called again with the same source and arguments returns the
 //! result of the first call; objects are created in the output model whose model type has
 //! their class (or the one named with `@`); objects of input models cannot be changed.
+//!
+//! Code of an imported library is evaluated with the model types of its unit. `new T(m)`
+//! makes an instance of an accessed transformation bound to models of this one, and its
+//! `transform()` runs it with a runner of its own (its own trace and properties).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use oxy_ecore::{ClassifierId, Metamodel, Model, ObjectId};
 use oxy_ocl::syntax::ast::Ident;
@@ -30,6 +35,7 @@ struct Trace {
 }
 
 /// A model parameter bound to a resource.
+#[derive(Clone)]
 struct Extent {
     name: String,
     resource: usize,
@@ -49,7 +55,15 @@ struct Runner<'t> {
     problems: RefCell<Vec<RunProblem>>,
     applications: Cell<usize>,
     created: Cell<usize>,
+    /// Instances of accessed transformations (`new T(m)`), with their properties.
+    instances: RefCell<Vec<Rc<Runner<'t>>>>,
 }
+
+/// The value of an instance of an accessed transformation.
+const INSTANCE: &str = "#instance:";
+/// The values of the statuses `transform()` returns.
+const SUCCEEDED: &str = "#status:succeeded";
+const FAILED: &str = "#status:failed";
 
 pub(crate) fn run(
     t: &Transformation,
@@ -68,29 +82,72 @@ pub(crate) fn run(
             Some(Extent { name: p.name.clone(), resource: b.resource, direction: p.direction })
         })
         .collect();
-    let runner = Runner {
-        t,
-        extents,
-        traces: RefCell::new(Vec::new()),
-        properties: RefCell::new(HashMap::new()),
-        intermediate: RefCell::new(HashMap::new()),
-        late: RefCell::new(Vec::new()),
-        log: RefCell::new(Vec::new()),
-        problems: RefCell::new(Vec::new()),
-        applications: Cell::new(0),
-        created: Cell::new(0),
-    };
-    let aborted = {
-        let mut ev = Evaluator::new_mut(mm, model, env).with_host(&runner).with_aliases(&t.aliases);
-        runner.init_properties(&mut ev, options);
+    let runner = Runner::new(t, extents);
+    let aborted = runner.execute(mm, env, model, Some(options));
+    let mut problems = runner.problems.take();
+    // Problems in imported units: where in their files.
+    for p in &mut problems {
+        if let Some(span) = p.span {
+            let (local, unit) = t.units.locate(span);
+            if unit.is_some() {
+                p.span = Some(local);
+                p.unit = unit;
+            }
+        }
+    }
+    RunResult {
+        log: runner.log.take(),
+        problems,
+        violations: Vec::new(),
+        applications: runner.applications.get(),
+        created: runner.created.get(),
+        aborted,
+    }
+}
+
+impl<'t> Runner<'t> {
+    fn new(t: &'t Transformation, extents: Vec<Extent>) -> Self {
+        Runner {
+            t,
+            extents,
+            traces: RefCell::new(Vec::new()),
+            properties: RefCell::new(HashMap::new()),
+            intermediate: RefCell::new(HashMap::new()),
+            late: RefCell::new(Vec::new()),
+            log: RefCell::new(Vec::new()),
+            problems: RefCell::new(Vec::new()),
+            applications: Cell::new(0),
+            created: Cell::new(0),
+            instances: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Runs the transformation: `main` (or the entry mapping), then the `late resolve`s; with
+    /// `options`, after setting its properties (an instance of an accessed transformation has
+    /// them already). Returns the message of a fatal assertion that ended it.
+    fn execute(
+        &self,
+        mm: &Metamodel,
+        env: &Environment,
+        model: &mut Model,
+        options: Option<&RunOptions>,
+    ) -> Option<String> {
+        let t = self.t;
+        let runner = self;
+        let mut ev = Evaluator::new_mut(mm, model, env).with_host(runner).with_aliases(t.aliases.clone());
+        if let Some(options) = options {
+            runner.init_properties(&mut ev, options);
+        }
         if let Some(main) = &t.main {
             let args = runner.entry_args(&ev, &t.main_params);
             let vars: Vec<(&str, Value)> = t.main_params.iter().map(|p| p.name.as_str()).zip(args).collect();
-            ev.call_frame(None, &vars, |ev| {
-                if let (Value::Invalid(m), Some(last)) = (ev.eval_statements(&main.body), main.body.last()) {
-                    ev.report(last.span, m.to_string());
-                }
-                ev.take_return();
+            runner.in_unit(&mut ev, t.main_unit, |ev| {
+                ev.call_frame(None, &vars, |ev| {
+                    if let (Value::Invalid(m), Some(last)) = (ev.eval_statements(&main.body), main.body.last()) {
+                        ev.report(last.span, m.to_string());
+                    }
+                    ev.take_return();
+                })
             });
         } else if let Some(i) = t.entry_mapping {
             let args = runner.entry_args(&ev, &t.mappings[i].1.params);
@@ -113,6 +170,20 @@ pub(crate) fn run(
                 let roots = roots.into_iter().filter(|o| model.container(*o).is_none()).collect();
                 model.set_roots(e.resource, roots);
             }
+        } else if let Some(i) = t.entry_helper {
+            let args = runner.entry_args(&ev, &t.helpers[i].1.params);
+            let result = runner.call_helper(&mut ev, i, None, &args);
+            if let Value::Invalid(m) = &result {
+                runner.problem(Some(t.helpers[i].0.name.span), m.to_string());
+            }
+            if t.implicit_output
+                && let Some(e) = runner.extent("result")
+                && let Some(model) = ev.model_mut()
+                && let Value::Object(o) = result
+                && model.container(o).is_none()
+            {
+                model.set_roots(e.resource, vec![o]);
+            }
         }
         // `late resolve`s, in order (they may defer further ones).
         for _ in 0..16 {
@@ -125,26 +196,81 @@ pub(crate) fn run(
             }
         }
         let errors = ev.take_errors();
-        runner
-            .problems
-            .borrow_mut()
-            .extend(errors.into_iter().map(|(span, message)| RunProblem { span: Some(span), message }));
+        runner.problems.borrow_mut().extend(errors.into_iter().map(|(span, message)| RunProblem {
+            span: Some(span),
+            message,
+            unit: None,
+        }));
         ev.aborted().map(str::to_string)
-    };
-    RunResult {
-        log: runner.log.take(),
-        problems: runner.problems.take(),
-        violations: Vec::new(),
-        applications: runner.applications.get(),
-        created: runner.created.get(),
-        aborted,
+    }
+
+    /// Runs `f` with the model types of a unit (for the code declared in it).
+    fn in_unit<R>(&self, ev: &mut Evaluator<'_>, unit: usize, f: impl FnOnce(&mut Evaluator<'_>) -> R) -> R {
+        let previous = ev.set_aliases(self.t.aliases_of(unit));
+        let r = f(ev);
+        ev.set_aliases(previous);
+        r
+    }
+
+    /// `new T(m1, m2)`: an instance of the accessed transformation `T` on these models, with
+    /// its properties set.
+    fn instantiate_transformation(&self, ev: &mut Evaluator<'_>, accessed: usize, args: &[Value]) -> Value {
+        let t = &self.t.accessed[accessed];
+        let mut extents = Vec::new();
+        for (p, a) in t.params.iter().zip(args) {
+            let Value::Model(m) = a else {
+                return Value::invalid(format!("'{}' needs a model for its parameter '{}'", t.name, p.name));
+            };
+            let Some(e) = self.extent(m) else {
+                return Value::invalid(format!("'{m}' is not a model parameter"));
+            };
+            if e.direction == Direction::In && p.direction != Direction::In {
+                let d = p.direction.keyword();
+                return Value::invalid(format!(
+                    "the input model '{m}' cannot be the {d} model '{}' of '{}'",
+                    p.name, t.name
+                ));
+            }
+            extents.push(Extent { name: p.name.clone(), resource: e.resource, direction: p.direction });
+        }
+        let nested = Runner::new(t, extents);
+        let (mm, env) = (ev.metamodel(), ev.environment());
+        let Some(model) = ev.model_mut() else { return Value::invalid("the models cannot be changed here") };
+        {
+            let mut inner = Evaluator::new_mut(mm, model, env).with_host(&nested).with_aliases(t.aliases.clone());
+            nested.init_properties(&mut inner, &RunOptions::default());
+        }
+        let mut instances = self.instances.borrow_mut();
+        instances.push(Rc::new(nested));
+        Value::Model(format!("{INSTANCE}{}", instances.len() - 1).into())
+    }
+
+    /// The instance of an accessed transformation a value stands for.
+    fn instance(&self, v: &Value) -> Option<Rc<Runner<'t>>> {
+        let Value::Model(m) = v else { return None };
+        let n: usize = m.strip_prefix(INSTANCE)?.parse().ok()?;
+        self.instances.borrow().get(n).cloned()
+    }
+
+    /// `instance.transform()`: runs an instance of an accessed transformation.
+    fn transform(&self, ev: &mut Evaluator<'_>, nested: &Runner<'t>) -> Value {
+        let (mm, env) = (ev.metamodel(), ev.environment());
+        let Some(model) = ev.model_mut() else { return Value::invalid("the models cannot be changed here") };
+        let aborted = nested.execute(mm, env, model, None);
+        self.log.borrow_mut().extend(nested.log.take());
+        let problems = nested.problems.take();
+        let failed = aborted.is_some() || !problems.is_empty();
+        self.problems.borrow_mut().extend(problems);
+        self.applications.set(self.applications.get() + nested.applications.take());
+        self.created.set(self.created.get() + nested.created.take());
+        Value::Model(if failed { FAILED } else { SUCCEEDED }.into())
     }
 }
 
 impl Runner<'_> {
-    /// `this`: the transformation.
+    /// `this`: the transformation (also named by the modules its operations come from).
     fn is_this(&self, v: &Value) -> bool {
-        matches!(v, Value::Model(m) if **m == *self.t.name)
+        matches!(v, Value::Model(m) if self.t.is_module(m))
     }
 
     /// The arguments of an entry with parameters (`main(in p : T)`): for each, the first root
@@ -168,19 +294,29 @@ impl Runner<'_> {
             .collect()
     }
 
+    /// The model of a parameter (also by its name in a transformation this one extends).
     fn extent(&self, name: &str) -> Option<&Extent> {
+        let name = self.t.param_aliases.iter().find(|(a, _)| a == name).map_or(name, |(_, real)| real.as_str());
         self.extents.iter().find(|e| e.name == name)
     }
 
     fn problem(&self, span: Option<oxy_ocl::Span>, message: impl Into<String>) {
-        self.problems.borrow_mut().push(RunProblem { span, message: message.into() });
+        self.problems.borrow_mut().push(RunProblem { span, message: message.into(), unit: None });
     }
 
     /// The values of the properties: configuration properties from the options (else their
     /// value), the others from their value.
     fn init_properties(&self, ev: &mut Evaluator<'_>, options: &RunOptions) {
-        for (p, s) in &self.t.properties {
-            if p.kind == PropertyKind::Intermediate {
+        // Those of the modules used last first: the module's own may use them.
+        let mut units: Vec<usize> = Vec::new();
+        for (_, s) in &self.t.properties {
+            if !units.contains(&s.unit) {
+                units.push(s.unit);
+            }
+        }
+        let ordered = units.iter().rev().flat_map(|u| self.t.properties.iter().filter(move |(_, s)| s.unit == *u));
+        for (p, s) in ordered {
+            if p.kind == PropertyKind::Intermediate || s.overridden {
                 continue;
             }
             let configured = options.configuration.iter().find(|(n, _)| *n == p.name.name).map(|(_, v)| v.clone());
@@ -193,7 +329,9 @@ impl Runner<'_> {
                         (_, v) => v,
                     }
                 }
-                (None, Some(init)) => ev.call_frame(None, &[], |ev| ev.eval(init)).unwrap_or(Value::Null),
+                (None, Some(init)) => {
+                    self.in_unit(ev, s.unit, |ev| ev.call_frame(None, &[], |ev| ev.eval(init))).unwrap_or(Value::Null)
+                }
                 (None, None) => match &s.ty {
                     Type::Collection(k, _) => Value::collection(*k, Vec::new()),
                     _ => Value::Null,
@@ -210,13 +348,15 @@ impl Runner<'_> {
         let (h, s) = &self.t.helpers[i];
         let vars: Vec<(&str, Value)> = s.params.iter().map(|p| p.name.as_str()).zip(args.iter().cloned()).collect();
         let self_value = if s.context.is_some() { source.cloned() } else { None };
-        ev.call_frame(self_value, &vars, |ev| match &h.body {
-            HelperBody::Expr(e) => ev.eval(e),
-            HelperBody::Block(items, _) => {
-                let v = ev.eval_statements(items);
-                ev.take_return().unwrap_or(v)
-            }
-            HelperBody::None => Value::invalid(format!("'{}' has no body", h.name.name)),
+        self.in_unit(ev, s.unit, |ev| {
+            ev.call_frame(self_value, &vars, |ev| match &h.body {
+                HelperBody::Expr(e) => ev.eval(e),
+                HelperBody::Block(items, _) => {
+                    let v = ev.eval_statements(items);
+                    ev.take_return().unwrap_or(v)
+                }
+                HelperBody::None => Value::invalid(format!("'{}' has no body", h.name.name)),
+            })
         })
         .unwrap_or_else(|| Value::invalid("maximum call depth exceeded (infinite recursion?)"))
     }
@@ -251,8 +391,10 @@ impl Runner<'_> {
         let Some(when) = &m.when else { return true };
         let vars: Vec<(&str, Value)> = s.params.iter().map(|p| p.name.as_str()).zip(args.iter().cloned()).collect();
         let self_value = if s.context.is_some() { source.clone() } else { None };
-        ev.call_frame(self_value, &vars, |ev| when.iter().all(|c| matches!(ev.eval(c), Value::Boolean(true))))
-            .unwrap_or(false)
+        self.in_unit(ev, s.unit, |ev| {
+            ev.call_frame(self_value, &vars, |ev| when.iter().all(|c| matches!(ev.eval(c), Value::Boolean(true))))
+        })
+        .unwrap_or(false)
     }
 
     /// Calls mapping `i`: through its disjuncts, from the trace, or by executing it.
@@ -286,19 +428,12 @@ impl Runner<'_> {
             }
         }
         let self_value = if s.context.is_some() { source.clone() } else { None };
-        ev.call_frame(self_value, &vars, |ev| self.execute(ev, i, source, args, strict))
+        self.in_unit(ev, s.unit, |ev| ev.call_frame(self_value, &vars, |ev| self.apply(ev, i, source, args, strict)))
             .unwrap_or_else(|| Value::invalid("maximum call depth exceeded (infinite recursion?)"))
     }
 
     /// The sections of a mapping, in its call frame.
-    fn execute(
-        &self,
-        ev: &mut Evaluator<'_>,
-        i: usize,
-        source: Option<Value>,
-        args: Vec<Value>,
-        strict: bool,
-    ) -> Value {
+    fn apply(&self, ev: &mut Evaluator<'_>, i: usize, source: Option<Value>, args: Vec<Value>, strict: bool) -> Value {
         let (m, s) = &self.t.mappings[i];
         // As in Eclipse QVTo, a guard that is not `true` (also `null` or `invalid`) makes the
         // mapping not applicable.
@@ -438,15 +573,17 @@ impl Runner<'_> {
             s.params.iter().map(|p| (p.name.clone(), ev.lookup_var(&p.name).unwrap_or(Value::Null))).collect();
         vars.push(("result".into(), result.clone()));
         let vars: Vec<(&str, Value)> = vars.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
-        ev.call_frame(self_value, &vars, |ev| {
-            if let Some(init) = &m.init {
-                ev.eval_statements(init);
-            }
-            self.populate(ev, h, result);
-            if let Some(end) = &m.end {
-                ev.eval_statements(end);
-            }
-            ev.take_return();
+        self.in_unit(ev, s.unit, |ev| {
+            ev.call_frame(self_value, &vars, |ev| {
+                if let Some(init) = &m.init {
+                    ev.eval_statements(init);
+                }
+                self.populate(ev, h, result);
+                if let Some(end) = &m.end {
+                    ev.eval_statements(end);
+                }
+                ev.take_return();
+            })
         });
     }
 
@@ -517,14 +654,18 @@ impl Host for Runner<'_> {
         if name == "this" {
             return Some(Value::Model(self.t.name.as_str().into()));
         }
-        if self.extent(name).is_some() {
-            return Some(Value::Model(name.into()));
+        if let Some(e) = self.extent(name) {
+            return Some(Value::Model(e.name.as_str().into()));
         }
         self.properties.borrow().get(name).cloned()
     }
 
     fn assign_variable(&self, _ev: &mut Evaluator<'_>, name: &str, value: Value) -> bool {
-        let module = self.t.properties.iter().any(|(p, _)| p.kind == PropertyKind::Module && p.name.name == name);
+        let module = self
+            .t
+            .properties
+            .iter()
+            .any(|(p, s)| p.kind != PropertyKind::Intermediate && p.name.name == name && !s.overridden);
         if module {
             self.properties.borrow_mut().insert(name.to_string(), value);
         }
@@ -533,6 +674,23 @@ impl Host for Runner<'_> {
 
     fn operation(&self, ev: &mut Evaluator<'_>, source: Option<&Value>, name: &str, args: &[Value]) -> Option<Value> {
         let source = source.filter(|v| !self.is_this(v));
+        // Instances of accessed transformations and the statuses of their runs.
+        if let (Some(Value::Model(m)), []) = (source, args) {
+            match (&**m, name) {
+                (_, "transform") if let Some(nested) = source.and_then(|s| self.instance(s)) => {
+                    return Some(self.transform(ev, &nested));
+                }
+                (s, "succeeded" | "failed") if s == SUCCEEDED || s == FAILED => {
+                    return Some(Value::Boolean((s == SUCCEEDED) == (name == "succeeded")));
+                }
+                (s, "raisedException") if s == SUCCEEDED || s == FAILED => return Some(Value::Null),
+                _ => {}
+            }
+        }
+        if let (None, "dump", [v]) = (source, name, args) {
+            self.log.borrow_mut().push(v.render(ev.metamodel(), ev.model()));
+            return Some(Value::Null);
+        }
         // Contextual helpers are not applied to null (the call is invalid, as in OCL).
         if source.is_some_and(Value::is_null) {
             return None;
@@ -564,7 +722,8 @@ impl Host for Runner<'_> {
 
     fn property(&self, ev: &mut Evaluator<'_>, source: &Value, name: &str) -> Option<Value> {
         match source {
-            Value::Model(m) if **m == *self.t.name => self.properties.borrow().get(name).cloned(),
+            Value::Model(m) if self.t.is_module(m) => self.properties.borrow().get(name).cloned(),
+            Value::Model(_) => self.instance(source)?.properties.borrow().get(name).cloned(),
             Value::Object(o) => {
                 let class = ev.model().class_of(*o);
                 let Some(i) = self.intermediate_property(ev.metamodel(), class, name) else {
@@ -578,9 +737,9 @@ impl Host for Runner<'_> {
                 }
                 let (p, s) = &self.t.properties[i];
                 let v = match (&p.init, &s.ty) {
-                    (Some(init), _) => {
-                        ev.call_frame(Some(source.clone()), &[], |ev| ev.eval(init)).unwrap_or(Value::Null)
-                    }
+                    (Some(init), _) => self
+                        .in_unit(ev, s.unit, |ev| ev.call_frame(Some(source.clone()), &[], |ev| ev.eval(init)))
+                        .unwrap_or(Value::Null),
                     (None, Type::Collection(k, _)) => Value::collection(*k, Vec::new()),
                     (None, _) => Value::Null,
                 };
@@ -606,6 +765,13 @@ impl Host for Runner<'_> {
         {
             return Some(ev.assign_property(target, real, value, add));
         }
+        // A property of an instance of an accessed transformation (also a configuration
+        // property: it is set before the instance runs).
+        if let Some(nested) = self.instance(target) {
+            nested.properties.borrow().get(name)?;
+            nested.properties.borrow_mut().insert(name.to_string(), value);
+            return Some(Ok(()));
+        }
         let current = self.property(ev, target, name)?;
         let new = if add {
             match (current, value) {
@@ -622,9 +788,6 @@ impl Host for Runner<'_> {
         };
         match target {
             Value::Model(_) => {
-                if self.t.properties.iter().any(|(p, _)| p.kind == PropertyKind::Configuration && p.name.name == name) {
-                    return Some(Err(format!("the configuration property '{name}' cannot be assigned")));
-                }
                 self.properties.borrow_mut().insert(name.to_string(), new);
             }
             Value::Object(o) => {
@@ -656,6 +819,21 @@ impl Host for Runner<'_> {
 
     fn create(&self, ev: &mut Evaluator<'_>, class: ClassifierId, extent: Option<&str>) -> Result<ObjectId, String> {
         Runner::create(self, ev, class, extent)
+    }
+
+    fn instantiate(
+        &self,
+        ev: &mut Evaluator<'_>,
+        ty: &oxy_ocl::syntax::ast::TypeExpr,
+        args: Vec<Value>,
+    ) -> Option<Value> {
+        let oxy_ocl::syntax::ast::TypeExprKind::Path(path) = &ty.kind else { return None };
+        let accessed = self.t.accessed(&path.last()?.name)?;
+        Some(self.instantiate_transformation(ev, accessed, &args))
+    }
+
+    fn named_type(&self, path: &[Ident]) -> Option<Type> {
+        self.t.named_type(path)
     }
 
     fn resolve(&self, ev: &mut Evaluator<'_>, request: &ResolveRequest) -> Vec<Value> {

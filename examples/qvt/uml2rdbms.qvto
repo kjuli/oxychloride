@@ -2,10 +2,13 @@
  * Class diagrams to relational schemas, in QVT Operational Mappings: a schema per package,
  * a table per persistent class with a primary key column, a column per attribute of a
  * primitive type, and a foreign key per attribute typed by a persistent class.
- * uml2rdbms.qvtr is the same transformation in QVT Relations.
+ * uml2rdbms.qvtr is the same transformation in QVT Relations. The SQL types and key columns
+ * come from the library sql/Types.qvto.
  *
  *   oxy qvt uml2rdbms.qvto -e uml.oclinecore -e rdbms.oclinecore --in source=company.hutn
  */
+import sql.Types;
+
 modeltype UML uses 'http://www.example.org/qvt/uml';
 modeltype RDBMS uses 'http://www.example.org/qvt/rdbms';
 
@@ -24,10 +27,7 @@ mapping UML::Class::classToTable() : RDBMS::Table
 	when { self.persistent }
 {
 	init {
-		var id := object RDBMS::Column {
-			name := self.name + '_tid';
-			type := 'NUMBER';
-		};
+		var id := idColumn(self.name);
 	}
 	name := self.name;
 	columns += id;
@@ -55,15 +55,6 @@ mapping UML::Attribute::attributeToForeignKey() : RDBMS::ForeignKey
 	when { self.type.oclIsKindOf(UML::Class) and self.type.oclAsType(UML::Class).persistent }
 {
 	name := self.name + '_fk';
-	columns += object RDBMS::Column {
-		name := self.name + '_tid';
-		type := 'NUMBER';
-	};
+	columns += idColumn(self.name);
 	refersTo := self.type.late resolveoneIn(UML::Class::classToKey, RDBMS::Key);
-}
-
-query sqlType(primitiveType : String) : String {
-	return if primitiveType = 'Integer' then 'NUMBER'
-		elif primitiveType = 'Boolean' then 'BOOLEAN'
-		else 'VARCHAR' endif;
 }

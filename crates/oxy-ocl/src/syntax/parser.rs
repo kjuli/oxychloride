@@ -103,8 +103,19 @@ impl Parser {
 
     /// A parser for OCL in the given dialect.
     pub fn with_dialect(src: &str, dialect: Dialect) -> Self {
-        let (tokens, diags) = tokenize_dialect(src, dialect);
-        Parser { tokens, pos: 0, diags, next_id: 0, dialect }
+        Parser::with_offset(src, dialect, 0)
+    }
+
+    /// A parser whose spans (and expression ids) start at `offset`: for sources compiled
+    /// together with others (QVTo's imported units), so that every span tells its source.
+    pub fn with_offset(src: &str, dialect: Dialect, offset: u32) -> Self {
+        let (mut tokens, mut diags) = tokenize_dialect(src, dialect);
+        if offset > 0 {
+            let shift = |s: &mut Span| *s = Span { start: s.start + offset, end: s.end + offset };
+            tokens.iter_mut().for_each(|t| shift(&mut t.span));
+            diags.iter_mut().for_each(|d| shift(&mut d.span));
+        }
+        Parser { tokens, pos: 0, diags, next_id: offset, dialect }
     }
 
     pub fn dialect(&self) -> Dialect {
@@ -409,6 +420,13 @@ impl Parser {
                 }
                 _ => self.ident("a property or operation name"),
             };
+            // `this.Lib::op(x)`: an operation of a module (QVTo), named by the whole path.
+            let mut name = name;
+            while self.dialect == Dialect::Qvt && !arrow && self.at(&TokenKind::ColonColon) {
+                self.bump();
+                let next = self.ident("a name after '::'");
+                name = Ident { name: format!("{}::{}", name.name, next.name), span: name.span.to(next.span) };
+            }
             if arrow {
                 expr = self.arrow_call(expr, name, safe);
                 continue;
@@ -785,10 +803,18 @@ impl Parser {
             path.push(self.ident("a name after '::'"));
         }
         if self.at(&TokenKind::LParen) {
-            if path.len() > 1 {
-                self.error(start.to(self.prev_span()), "qualified operation calls are not supported");
+            let mut name = path.pop().unwrap();
+            if !path.is_empty() {
+                if self.dialect == Dialect::Qvt {
+                    // `Lib::op(x)`: an operation of a module (QVTo), named by the whole path.
+                    let span = path[0].span.to(name.span);
+                    let mut text: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
+                    text.push(&name.name);
+                    name = Ident { name: text.join("::"), span };
+                } else {
+                    self.error(start.to(self.prev_span()), "qualified operation calls are not supported");
+                }
             }
-            let name = path.pop().unwrap();
             let args = self.args();
             let at_pre = self.at_pre();
             let span = start.to(self.prev_span());

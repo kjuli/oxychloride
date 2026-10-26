@@ -26,7 +26,11 @@ fn run(text: &str, options: &RunOptions) -> (Fixture, oxy_qvt::RunResult, usize)
 
 #[test]
 fn uml_to_rdbms() {
-    let (f, result, out) = run(&read("uml2rdbms.qvto"), &RunOptions::default());
+    // It imports its SQL types and key columns from the library `sql/Types.qvto`.
+    let mut f = fixture();
+    let c = f.compile_example(Language::Operational, "uml2rdbms.qvto");
+    no_errors(&c);
+    let (result, out) = f.run(&c, &RunOptions::default());
     assert!(result.problems.is_empty(), "{:#?}", result.problems);
     let text = f.hutn(out);
     assert!(text.contains("Table {\n        name: \"Person\""), "{text}");
