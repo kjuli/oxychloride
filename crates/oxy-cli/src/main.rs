@@ -4,11 +4,11 @@ mod render;
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use oxychloride::{Diagnostic, Language, ObjectRef, Severity, ValidateOptions, Workspace};
+use oxychloride::{Diagnostic, Language, ObjectRef, RegistryEntry, Severity, ValidateOptions, Workspace};
 
 use render::Renderer;
 
@@ -57,8 +57,9 @@ struct Inputs {
     /// reference are loaded too.
     #[arg(short, long = "model", value_name = "FILE")]
     model: Vec<PathBuf>,
-    /// Map a URI prefix to a directory, e.g. `pathmap://PCM_MODELS/=path/to/models/`.
-    #[arg(long = "map", value_name = "PREFIX=DIR")]
+    /// Map a URI prefix to a directory (`pathmap://PCM_MODELS/=path/to/models/`), or register a
+    /// URI for a metamodel file (`http://example.org/shop=shop.ecore`, see the package registry).
+    #[arg(long = "map", value_name = "URI=PATH")]
     map: Vec<String>,
 }
 
@@ -159,8 +160,9 @@ enum Command {
         /// The name of the generated package or crate (default: the first package's name).
         #[arg(long)]
         name: Option<String>,
-        /// Map a URI prefix to a directory, e.g. `pathmap://PCM_MODELS/=path/to/models/`.
-        #[arg(long = "map", value_name = "PREFIX=DIR")]
+        /// Map a URI prefix to a directory (`pathmap://PCM_MODELS/=path/to/models/`), or register
+        /// a URI for a metamodel file (`http://example.org/shop=shop.ecore`).
+        #[arg(long = "map", value_name = "URI=PATH")]
         map: Vec<String>,
     },
     /// Serve the JSON-RPC protocol on stdin/stdout (one JSON message per line).
@@ -197,9 +199,22 @@ fn main() -> ExitCode {
 /// Loads metamodels and models. OCLinEcore and HUTN files are opened as documents (OCLinEcore
 /// first, so that models can use their classes); their names are returned.
 fn load(ws: &mut Workspace, inputs: &Inputs, warnings: &mut Vec<Diagnostic>) -> Result<Vec<String>, String> {
+    let mut registry = Vec::new();
     for m in &inputs.map {
-        let (from, to) = m.split_once('=').ok_or_else(|| format!("invalid --map '{m}' (expected PREFIX=DIR)"))?;
-        ws.map_uri(from, to);
+        let (from, to) = m.split_once('=').ok_or_else(|| format!("invalid --map '{m}' (expected URI=PATH)"))?;
+        if Path::new(to).is_file() {
+            registry.push(RegistryEntry { uri: from.to_string(), location: to.to_string() });
+        } else {
+            ws.map_uri(from, to);
+        }
+    }
+    if !registry.is_empty() {
+        for entry in ws.set_registry(registry) {
+            if let Some(message) = entry.message {
+                return Err(format!("cannot register '{}': {message}", entry.uri));
+            }
+            warnings.extend(entry.warnings);
+        }
     }
     let mut documents = Vec::new();
     for e in &inputs.ecore {

@@ -375,7 +375,7 @@ impl<'x> Reader<'_, 'x> {
         let file_name = Path::new(uri).file_name();
         let by_path = mm.resources().iter().find(|r| {
             let p = Path::new(&r.uri);
-            p == resolved || normalize(p) == normalized || r.uri == uri
+            p == resolved || normalize(p) == normalized || r.is_named(uri)
         });
         let by_name =
             || mm.resources().iter().find(|r| file_name.is_some() && Path::new(&r.uri).file_name() == file_name);

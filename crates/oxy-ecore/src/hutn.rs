@@ -687,7 +687,7 @@ pub fn load_document(doc: &Document, problems: Vec<Problem>, uri: &str, mm: &Met
             }
             None => l.problems.push(Problem::error(
                 s.span.clone(),
-                format!("no metamodel with nsURI '{ns}' is loaded (load its .ecore or OCLinEcore document first)"),
+                format!("no metamodel with nsURI '{ns}' is loaded (register its .ecore file, or open its OCLinEcore document)"),
             )),
         }
     }

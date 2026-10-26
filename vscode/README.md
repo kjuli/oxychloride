@@ -39,8 +39,21 @@ the `oxy` CLI.
   checked on the open models while you edit them. Violations are shown on the objects in
   the Problems view. Editing a metamodel or a constraint re-checks its models right away.
   Metamodels (`.oclinecore`) and constraints (`.ocl`) of the workspace are found without
-  opening them; `.ecore` metamodels are loaded through `import`s, `xsi:schemaLocation` or
-  **Load .ecore Metamodel**.
+  opening them; `.ecore` metamodels are loaded through the package registry, `import`s,
+  `xsi:schemaLocation` or **Load .ecore Metamodel**.
+- **Package registry:** like EMF's package registry and URI map, it says which file a URI
+  stands for: a package's nsURI, or any URI that `.ecore` files, imports and models use for
+  a metamodel — also one that cannot be reached, such as a placeholder
+  (`http://example.org/shop`) or a `platform:/plugin/…` URI. Registered metamodels are loaded
+  with the metamodels they import and are known everywhere: HUTN and XMI models of their
+  nsURI, `import`s of OCL and OCLinEcore documents, Henshin transformations, and other
+  `.ecore` files referring to them (`eType="http://example.org/shop#//Item"`). Register a
+  file with **Register Metamodel…** (the **Package Registry** view, the Explorer context menu
+  of `.ecore`/`.xml` files, or the quick fix on a "cannot find metamodel" problem), all
+  `.ecore` files of the workspace at once with **Register Workspace Metamodels…**, or a
+  folder for a URI prefix (`pathmap://MODELS/`) with **Map URI Prefix to Folder…**. The
+  registry is kept in the setting `oxychloride.registry` (in `.vscode/settings.json`, with
+  paths relative to the workspace folder), so it is shared with the project.
 - **XMI models:** `.xmi` files are checked like HUTN models (load problems, multiplicities,
   constraints). With the [XML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-xml)
   installed, Oxychloride also generates an **XML Schema** for every loaded metamodel and
@@ -52,6 +65,9 @@ the `oxy` CLI.
   problems and the pre-/postconditions violated by the operation calls the expression makes.
   **Evaluate Selection in OCL Console** (⇧⌘↩ / Ctrl+Shift+Enter) sends the selected text.
 - **Views** (Oxychloride activity bar):
+  - **Package Registry** — the registered URIs and their files, each with its packages,
+    the metamodels it imports and its problems (a file that is missing or cannot be
+    loaded, references that cannot be resolved). Click to open the file.
   - **Metamodels** — packages, classes, features, operations, invariants. Right-click a
     class: **Create Instance** (in the current HUTN model, or a new one), **Create Dynamic
     Instance (XMI)…** (a new XMI file, like EMF's), **New Model** on a package.
@@ -138,6 +154,7 @@ philosophers.
 | Setting | |
 |---|---|
 | `oxychloride.server.path` | The `oxy` executable (default: bundled, else a build of an Oxychloride checkout, else `oxy` on the `PATH`) |
+| `oxychloride.registry` | The package registry: `{"<uri>": "<file>"}`, e.g. `{"http://example.org/shop": "models/shop.ecore"}`; a URI ending in `/` maps a prefix to a folder |
 | `oxychloride.generateEcoreOnSave` | Write `<name>.ecore` next to an OCLinEcore metamodel whenever it is saved (default: off) |
 | `oxychloride.henshin.syncPairs` | Keep a Henshin text and the `.henshin` file of the same name next to it equivalent (default: on) |
 | `oxychloride.xmlSchemas` | Generate and register XML Schemas for XMI files (default: on) |

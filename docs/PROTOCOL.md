@@ -37,9 +37,28 @@ Loads a metamodel. Referenced `.ecore` files are loaded too (from disk, relative
 Loads an XMI instance model. Missing metamodels are loaded from `xsi:schemaLocation` when possible. Model files the model references (`href="other.xmi#..."`) are loaded too, like an EMF resource set; references into resources that cannot be found are reported as one warning per target resource and resolved automatically if that resource is loaded later.
 
 ### `mapUri` `{from, to}` → `null`
-Maps a URI prefix to a directory, e.g. `{"from": "pathmap://PCM_MODELS/", "to": "/path/to/PCM_MODELS/"}`. Pending references into mapped resources are resolved immediately.
+Maps a URI prefix to a directory, e.g. `{"from": "pathmap://PCM_MODELS/", "to": "/path/to/PCM_MODELS/"}`. Pending references into mapped resources are resolved immediately. References between `.ecore` files under the prefix are read from the directory too. See also the package registry (`setRegistry`).
 
 `LoadResult`: `{uri, packages?: [nsURI], objects?: number, warnings: [Diagnostic]}`.
+
+### `setRegistry` `{entries: [RegistryEntry]}` → `[RegistryInfo]` · `registry` → `[RegistryInfo]`
+The package registry, like EMF's package registry and URI map. An entry `{uri, location}` says that `uri` stands for the metamodel in the file `location` (an `.ecore` file, or Ecore XML under another extension; relative paths are resolved against the server's working directory). `uri` is a package's nsURI or any URI that `.ecore` files, imports and models use for the metamodel, reachable or not: `http://example.org/shop`, `platform:/plugin/org.example.shop/model/shop.ecore`. Registered files are loaded right away, with the files they refer to, before all other `.ecore` files, so their packages are known to every document and model. Every reference to a registered URI is read from the registered file, which is then known by that URI too: `href`s between `.ecore` files (`eType="http://example.org/shop#//Item"`), `import`s of Complete OCL and OCLinEcore documents, `xsi:schemaLocation`s. A `uri` ending in `/` maps a prefix to the folder `location` (like `mapUri`); files under it are loaded when something refers to them.
+
+`setRegistry` replaces the registry and reloads metamodels, models and document imports (nothing happens if the entries did not change); `registry` returns the state of the entries:
+
+```ts
+type RegistryInfo = {
+  uri: string; location: string;                 // location: absolute
+  status: "loaded" | "folder" | "missing" | "error";
+  message?: string;                              // why the file is missing or could not be loaded
+  resource?: RegisteredResource;                 // the loaded file
+  imports: RegisteredResource[];                 // the metamodels it uses, directly or through others (not Ecore)
+  warnings: Diagnostic[];                        // e.g. references that cannot be resolved
+};
+type RegisteredResource = { uri: string; aliases?: string[]; packages: { name: string; nsUri: string }[] };
+```
+
+Diagnostics about metamodels that cannot be found name the URI (`cannot find imported metamodel '…'`, `unknown package nsURI '…'`, `no metamodel with nsURI '…'`, `cannot resolve reference '…#…'`), so clients can offer to register a file for it.
 
 ### `reset` → `null` · `clearModels` → `null` · `reload` → `{problems: [Diagnostic]}`
 `reset` empties the workspace; `clearModels` removes instance models only; `reload` re-reads all metamodels and models from their sources and re-resolves document imports.
@@ -292,11 +311,12 @@ The text edits that make a diagram edit (the document is not changed). `edit` is
 
 `oxy lsp` speaks the Language Server Protocol on stdio (`--stdio` is accepted and ignored). It keeps one workspace:
 
-- Documents open in the editor (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text` with language id `henshin`; `.xmi` and `.henshin` with language id `xml`) are workspace documents named by their path; unsaved documents are named by their URI, their language comes from the language id. The `.oclinecore`, `.ocl`, `.henshin_text` and `.henshin` files of the workspace folders are loaded too, from disk while they are not open (and reloaded on `workspace/didChangeWatchedFiles`), so models find their metamodels and constraints. A changed `.ecore` file that is loaded (imported, or named by a model) reloads all metamodels.
+- Documents open in the editor (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text` with language id `henshin`; `.xmi` and `.henshin` with language id `xml`) are workspace documents named by their path; unsaved documents are named by their URI, their language comes from the language id. The `.oclinecore`, `.ocl`, `.henshin_text` and `.henshin` files of the workspace folders are loaded too, from disk while they are not open (and reloaded on `workspace/didChangeWatchedFiles`), so models find their metamodels and constraints. A changed `.ecore` file that is loaded (imported, named by a model, or registered) reloads all metamodels.
+- `initializationOptions.registry` (`[RegistryEntry]`) sets the package registry (see `setRegistry`) before the workspace folders are loaded.
 - Once changes settle (200 ms), the diagnostics of all documents are published (`source: "ocl"`); they depend on each other, e.g. editing a metamodel re-checks its models.
 - `textDocument/hover` and `textDocument/completion` (LSP positions count UTF-16 code units; they are converted).
 - `oxychloride/rpc` `{method, params}` → the result of any method above. Its positions are the engine's (Unicode scalar columns), and document names are paths (or URIs of unsaved documents).
-- The notification `oxychloride/workspaceChanged` (no params) says that `packages` or `models` changed.
+- The notification `oxychloride/workspaceChanged` (no params) says that `packages`, `models` or the state of the `registry` changed.
 
 The VS Code extension (`vscode/`) is its client.
 

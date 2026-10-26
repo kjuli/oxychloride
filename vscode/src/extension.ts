@@ -1,5 +1,5 @@
 // Oxychloride for VS Code: a client of the engine's language server (`oxy lsp`) plus views
-// (metamodels, models, validation results), an OCL console, commands to create model content,
+// (metamodels, the package registry, models, validation results), an OCL console, commands to create model content,
 // XML Schemas for XMI models, the metamodel diagram (a graphical editor for `.ecore` and
 // `.oclinecore` files), the rule diagram (a graphical editor for Henshin texts and `.henshin`
 // files, which are kept equivalent in pairs), the transformation view for Henshin rules, and
@@ -14,6 +14,7 @@ import { Creator } from "./create";
 import { MetamodelDiagramEditor, openDiagram, type DiagramView } from "./diagram";
 import { documentName, reveal } from "./documents";
 import { HenshinPairs, counterpart } from "./henshinPairs";
+import { PackageRegistry, type RegistryNode } from "./registry";
 import { RuleDiagramEditor, openRuleDiagram, type RuleDiagramView } from "./ruleDiagram";
 import {
   Engine,
@@ -38,6 +39,8 @@ export interface OxychlorideApi {
   creator: Creator;
   codeGenerator: CodeGenerator;
   metamodels: MetamodelTree;
+  /** The package registry (URIs standing for metamodel files). */
+  registry: PackageRegistry;
   models: ModelTree;
   validation: ValidationTree;
   /** The open metamodel diagrams. */
@@ -58,6 +61,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   const output = vscode.window.createOutputChannel("Oxychloride", { log: true });
   const engine = new Engine(() => client);
   const metamodels = new MetamodelTree(engine);
+  const registry = new PackageRegistry(engine);
   const models = new ModelTree(engine);
   const validation = new ValidationTree();
   const creator = new Creator(engine, () => metamodels.packages);
@@ -66,7 +70,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   const oclConsole = new OclConsole(engine, () => chooseContext(models.models));
 
   const refresh = async () => {
-    await Promise.all([metamodels.refresh(), models.refresh(), ...TransformationPanel.all().map((p) => p.refresh())]);
+    await Promise.all([
+      metamodels.refresh(),
+      registry.refresh(),
+      models.refresh(),
+      ...TransformationPanel.all().map((p) => p.refresh()),
+    ]);
     await schemas.update();
   };
 
@@ -84,7 +93,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
         { scheme: "file", language: "xml", pattern: "**/*.xmi" },
         { scheme: "file", language: "xml", pattern: "**/*.henshin" },
       ],
-      synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{ocl,oclinecore,ecore,henshin_text,henshin}") },
+      // Registered metamodels may be Ecore XML under other extensions.
+      synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{ocl,oclinecore,ecore,xml,henshin_text,henshin}") },
+      // The package registry is there before the server loads the workspace folders.
+      initializationOptions: () => ({ registry: registry.entries() }),
       outputChannel: output,
     };
     client = new LanguageClient("oxychloride", "Oxychloride", serverOptions, clientOptions);
@@ -114,12 +126,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   context.subscriptions.push(
     output,
     vscode.window.registerTreeDataProvider("oxychloride.metamodels", metamodels),
+    vscode.window.registerTreeDataProvider("oxychloride.registry", registry),
+    vscode.languages.registerCodeActionsProvider(
+      [...LANGUAGES.map((language) => ({ language })), { language: "xml", pattern: "**/*.{xmi,henshin}" }],
+      registry,
+      { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+    ),
     vscode.window.registerTreeDataProvider("oxychloride.models", models),
     vscode.window.registerTreeDataProvider("oxychloride.validation", validation),
     vscode.window.registerWebviewViewProvider(OclConsole.viewId, oclConsole, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.window.onDidChangeActiveTextEditor((e) => creator.track(e)),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("oxychloride.xmlSchemas")) void schemas.update();
+      if (e.affectsConfiguration("oxychloride.registry")) void registry.sync();
     }),
     { dispose: () => void schemas.dispose() },
     MetamodelDiagramEditor.register(context, engine, ready.then(() => undefined)),
@@ -239,6 +258,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
       }
     }
   });
+  // The package registry. From the Explorer (a file, and the selection), the editor, a quick
+  // fix (the URI to register a file for) or code (both).
+  register("oxychloride.registerMetamodel", async (file?: vscode.Uri, uri?: unknown) => {
+    await ready;
+    return registry.register(file instanceof vscode.Uri ? file : undefined, typeof uri === "string" ? uri : undefined);
+  });
+  register("oxychloride.mapUriPrefix", async (folder?: vscode.Uri, prefix?: unknown) => {
+    await ready;
+    return registry.mapFolder(folder instanceof vscode.Uri ? folder : undefined, typeof prefix === "string" ? prefix : undefined);
+  });
+  register("oxychloride.unregisterMetamodel", (node?: RegistryNode | string) => registry.unregister(node));
+  register("oxychloride.registerWorkspaceMetamodels", async () => {
+    await ready;
+    return registry.registerWorkspace();
+  });
+  register("oxychloride.editRegistry", () => registry.openSettings());
+
   register("oxychloride.loadModel", async (uri?: vscode.Uri) => {
     const files = uri
       ? [uri]
@@ -481,6 +517,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     creator,
     codeGenerator,
     metamodels,
+    registry,
     models,
     validation,
     diagrams: () => MetamodelDiagramEditor.all(),

@@ -29,7 +29,7 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi,henshin_text,henshin}",
+    "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi,ecore,henshin_text,henshin}",
     "onLanguage:xml"
   ],
   "contributes": {
@@ -136,6 +136,15 @@
           "default": "",
           "markdownDescription": "Path of the `oxy` executable that runs the language server (`oxy lsp`). Empty: the one bundled with the extension, else `target/debug/oxy` or `target/release/oxy` of an Oxychloride checkout in the workspace, else `oxy` on the `PATH`."
         },
+        "oxychloride.registry": {
+          "type": "object",
+          "scope": "resource",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "markdownDescription": "The package registry, like EMF's package registry and URI map: URIs and the metamodel files they stand for (`.ecore`, or Ecore XML under another extension), e.g. `{\"http://example.org/shop\": \"models/shop.ecore\"}`. A URI is a package's nsURI or any URI that `.ecore` files, imports and models use for the metamodel; it need not be reachable (placeholders such as `http://example.org/…` or `platform:/plugin/…` URIs are fine). Registered files are loaded with the metamodels they import, so documents and models of the workspace find them. A URI ending in `/` maps a prefix to a folder (`\"pathmap://MODELS/\": \"models\"`). Paths are relative to the workspace folder. Managed in the **Package Registry** view."
+        },
         "oxychloride.generateEcoreOnSave": {
           "type": "boolean",
           "default": false,
@@ -201,6 +210,10 @@
           "name": "Metamodels"
         },
         {
+          "id": "oxychloride.registry",
+          "name": "Package Registry"
+        },
+        {
           "id": "oxychloride.models",
           "name": "Models"
         },
@@ -220,7 +233,11 @@
     "viewsWelcome": [
       {
         "view": "oxychloride.metamodels",
-        "contents": "No metamodel loaded. Write one in an .oclinecore file, or load an .ecore file.\n[Load .ecore Metamodel](command:oxychloride.loadMetamodel)"
+        "contents": "No metamodel loaded. Write one in an .oclinecore file, or register an .ecore file in the package registry.\n[Register Metamodel…](command:oxychloride.registerMetamodel)"
+      },
+      {
+        "view": "oxychloride.registry",
+        "contents": "No metamodel is registered. Register .ecore files under their nsURI, or under any URI other files use for them (also placeholders that cannot be reached): documents, models and other metamodels of the workspace then find them.\n[Register Metamodel…](command:oxychloride.registerMetamodel)\n[Register Workspace Metamodels…](command:oxychloride.registerWorkspaceMetamodels)\n[Map URI Prefix to Folder…](command:oxychloride.mapUriPrefix)"
       },
       {
         "view": "oxychloride.models",
@@ -301,6 +318,36 @@
         "title": "Validate Models",
         "category": "Oxychloride",
         "icon": "$(check-all)"
+      },
+      {
+        "command": "oxychloride.registerMetamodel",
+        "title": "Register Metamodel…",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.registerWorkspaceMetamodels",
+        "title": "Register Workspace Metamodels…",
+        "category": "Oxychloride",
+        "icon": "$(search)"
+      },
+      {
+        "command": "oxychloride.mapUriPrefix",
+        "title": "Map URI Prefix to Folder…",
+        "category": "Oxychloride",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "oxychloride.unregisterMetamodel",
+        "title": "Unregister",
+        "category": "Oxychloride",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "oxychloride.editRegistry",
+        "title": "Edit Package Registry in Settings",
+        "category": "Oxychloride",
+        "icon": "$(json)"
       },
       {
         "command": "oxychloride.loadMetamodel",
@@ -404,7 +451,7 @@
       "view/title": [
         {
           "command": "oxychloride.refresh",
-          "when": "view == oxychloride.metamodels || view == oxychloride.models",
+          "when": "view == oxychloride.metamodels || view == oxychloride.models || view == oxychloride.registry",
           "group": "navigation"
         },
         {
@@ -428,6 +475,28 @@
         {
           "command": "oxychloride.newModel",
           "when": "view == oxychloride.models"
+        },
+        {
+          "command": "oxychloride.registerMetamodel",
+          "when": "view == oxychloride.registry",
+          "group": "navigation@1"
+        },
+        {
+          "command": "oxychloride.editRegistry",
+          "when": "view == oxychloride.registry",
+          "group": "navigation@2"
+        },
+        {
+          "command": "oxychloride.registerWorkspaceMetamodels",
+          "when": "view == oxychloride.registry"
+        },
+        {
+          "command": "oxychloride.mapUriPrefix",
+          "when": "view == oxychloride.registry"
+        },
+        {
+          "command": "oxychloride.registerMetamodel",
+          "when": "view == oxychloride.metamodels"
         }
       ],
       "view/item/context": [
@@ -500,6 +569,16 @@
           "command": "oxychloride.generateCode",
           "when": "view == oxychloride.metamodels && viewItem == package",
           "group": "2_export@2"
+        },
+        {
+          "command": "oxychloride.unregisterMetamodel",
+          "when": "view == oxychloride.registry && viewItem == registryEntry",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.unregisterMetamodel",
+          "when": "view == oxychloride.registry && viewItem == registryEntry",
+          "group": "1_edit@1"
         }
       ],
       "editor/title": [
@@ -585,6 +664,16 @@
         {
           "command": "oxychloride.convertToText",
           "when": "resourceExtname == .ecore || resourceExtname == .xmi",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.registerMetamodel",
+          "when": "resourceExtname =~ /^\\.(ecore|xml|xmi|emof)$/",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.mapUriPrefix",
+          "when": "explorerResourceIsFolder",
           "group": "7_modification"
         },
         {

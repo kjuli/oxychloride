@@ -60,6 +60,7 @@ export class RuleDiagramView {
   /** What this view last wrote to (or read from) the layout file. */
   private layoutText: string | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private disposed = false;
   private generation = 0;
   private diagram: TransformationDiagram | undefined;
   private readonly disposables: vscode.Disposable[] = [];
@@ -107,6 +108,7 @@ export class RuleDiagramView {
       this.disposables.push(watcher, watcher.onDidChange(reread), watcher.onDidCreate(reread));
     }
     panel.onDidDispose(() => {
+      this.disposed = true;
       clearTimeout(this.refreshTimer);
       for (const d of this.disposables) d.dispose();
     });
@@ -119,7 +121,8 @@ export class RuleDiagramView {
   }
 
   private post(message: ToRuleWebview): void {
-    void this.panel.webview.postMessage(message);
+    // Answers from the engine may arrive after the panel was closed.
+    if (!this.disposed) void this.panel.webview.postMessage(message);
   }
 
   private postPair(): void {

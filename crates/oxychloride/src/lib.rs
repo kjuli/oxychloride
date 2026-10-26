@@ -40,6 +40,7 @@ mod editor;
 mod generate;
 mod henshin_documents;
 pub mod protocol;
+mod registry;
 pub mod rpc;
 mod textdiff;
 mod transform;

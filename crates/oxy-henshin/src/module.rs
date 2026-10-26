@@ -437,7 +437,7 @@ impl Compiler<'_> {
                 None if text.is_empty() => {}
                 None => self.error(
                     &import.span,
-                    format!("unknown package '{text}': open or load its metamodel (.oclinecore or .ecore)"),
+                    format!("unknown package '{text}': open its metamodel (.oclinecore) or register it (.ecore)"),
                 ),
             }
         }

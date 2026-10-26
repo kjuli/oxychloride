@@ -40,7 +40,7 @@ impl Workspace {
     pub fn metamodel_diagram(&self, name: &str, text: Option<&str>) -> Result<MetamodelDiagram, Error> {
         if is_ecore(name) {
             let text = ecore_text(name, text)?;
-            let file = ecore::File::load(name, &text)?;
+            let file = ecore::File::load(name, &text, &self.locator())?;
             let doc = ecore::Doc::new(&text, &file.root);
             let cx = Context::new(&file.mm, file.resource, &text);
             let problems = file
@@ -83,7 +83,7 @@ impl Workspace {
     ) -> Result<MetamodelEditResult, Error> {
         let (edits, element, text) = if is_ecore(name) {
             let text = ecore_text(name, text)?;
-            let file = ecore::File::load(name, &text)?;
+            let file = ecore::File::load(name, &text, &self.locator())?;
             let doc = ecore::Doc::new(&text, &file.root);
             let cx = Context::new(&file.mm, file.resource, &text);
             let (edits, element) = doc.edit(&cx, edit)?;

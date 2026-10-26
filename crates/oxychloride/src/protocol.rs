@@ -392,6 +392,81 @@ pub struct LoadResult {
     pub warnings: Vec<Diagnostic>,
 }
 
+// ------------------------------------------------------------------ package registry
+
+/// An entry of the package registry, like EMF's package registry and URI map: `uri` — a
+/// package's nsURI, or any URI that `.ecore` files, imports and models use for a metamodel,
+/// reachable or not (`http://example.org/shop`, `platform:/plugin/x/model/shop.ecore`) — stands
+/// for the metamodel in the file `location` (an `.ecore` file, or Ecore XML under another
+/// extension). A `uri` ending in `/` maps a prefix to the folder `location` instead
+/// (`pathmap://MODELS/` → `/path/to/models`); its files are loaded when something refers to them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryEntry {
+    pub uri: String,
+    /// A path (absolute, or relative to the working directory).
+    pub location: String,
+}
+
+impl RegistryEntry {
+    /// Whether the entry maps a URI prefix to a folder.
+    pub fn is_prefix(&self) -> bool {
+        self.uri.ends_with('/')
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RegistryStatus {
+    /// The file is loaded (its packages are part of the workspace's metamodels).
+    Loaded,
+    /// A prefix mapped to a folder; files under it are loaded on demand.
+    Folder,
+    /// The file or folder does not exist.
+    Missing,
+    /// The file could not be loaded (see `message`).
+    Error,
+}
+
+/// A package of a registered metamodel.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredPackage {
+    pub name: String,
+    pub ns_uri: String,
+}
+
+/// A metamodel resource (an `.ecore` file) loaded for a registry entry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredResource {
+    /// Its canonical path (or URI).
+    pub uri: String,
+    /// The other URIs it is known by (registered URIs, URIs other files refer to it by).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub aliases: Vec<String>,
+    pub packages: Vec<RegisteredPackage>,
+}
+
+/// The state of a registry entry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryInfo {
+    pub uri: String,
+    pub location: String,
+    pub status: RegistryStatus,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub message: Option<String>,
+    /// The loaded file (status `loaded`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub resource: Option<RegisteredResource>,
+    /// The metamodels the file uses, directly or through others (`.ecore` files it refers
+    /// to, by path or by a registered URI), without Ecore itself.
+    pub imports: Vec<RegisteredResource>,
+    /// Problems loading the file, e.g. references that cannot be resolved.
+    pub warnings: Vec<Diagnostic>,
+}
+
 // ------------------------------------------------------------------ editor support
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

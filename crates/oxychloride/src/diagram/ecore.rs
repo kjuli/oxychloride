@@ -7,7 +7,9 @@ use std::ops::Range as ByteRange;
 
 use oxy_ecore::ecore_writer::{href, type_href};
 use oxy_ecore::xml::{self, Element as Xml, XSI_NS, escape_attr};
-use oxy_ecore::{ClassifierId, ElementRef, LoadError, Metamodel, ecore_loader};
+use oxy_ecore::{ClassifierId, ElementRef, LoadError, Metamodel};
+
+use crate::registry::Locator;
 
 use super::oclinecore::check_super_type;
 use super::*;
@@ -21,11 +23,12 @@ pub(crate) struct File {
 }
 
 impl File {
-    /// Loads the file's text (named by its path: referenced files are loaded relative to it).
-    pub(crate) fn load(name: &str, text: &str) -> Result<File, Error> {
+    /// Loads the file's text (named by its path: referenced files are loaded relative to it, or
+    /// from where the package registry says).
+    pub(crate) fn load(name: &str, text: &str, locator: &Locator) -> Result<File, Error> {
         let root = xml::parse(text, name)?;
         let mut mm = Metamodel::new();
-        let load = ecore_loader::load_with(&mut mm, text, name, &mut |dep| std::fs::read_to_string(dep).ok())?;
+        let load = locator.load_str(&mut mm, text, name)?;
         Ok(File { mm, resource: load.resource, root, warnings: load.warnings })
     }
 }

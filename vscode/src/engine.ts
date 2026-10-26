@@ -152,6 +152,34 @@ export interface LoadResult {
   warnings: Diagnostic[];
 }
 
+/** An entry of the package registry: `uri` (an nsURI, or any URI used for a metamodel, reachable
+ * or not) stands for the metamodel file `location`; a `uri` ending in `/` maps a prefix to the
+ * folder `location`. */
+export interface RegistryEntry {
+  uri: string;
+  location: string;
+}
+
+export interface RegisteredPackage {
+  name: string;
+  nsUri: string;
+}
+
+export interface RegisteredResource {
+  uri: string;
+  aliases?: string[];
+  packages: RegisteredPackage[];
+}
+
+export interface RegistryInfo extends RegistryEntry {
+  status: "loaded" | "folder" | "missing" | "error";
+  message?: string;
+  resource?: RegisteredResource;
+  /** The metamodels the file uses, directly or through others (without Ecore). */
+  imports: RegisteredResource[];
+  warnings: Diagnostic[];
+}
+
 export interface DocumentEdit {
   edits: { range: Range; text: string }[];
   cursor: Position;
@@ -666,6 +694,9 @@ export class Engine {
     this.call<ValidationReport>("validate", options);
   loadEcore = (path: string) => this.call<LoadResult>("loadEcore", { path });
   loadModel = (path: string) => this.call<LoadResult>("loadModel", { path });
+  registry = () => this.call<RegistryInfo[]>("registry");
+  /** Replaces the package registry; the metamodels, models and imports are reloaded. */
+  setRegistry = (entries: RegistryEntry[]) => this.call<RegistryInfo[]>("setRegistry", { entries });
   exportDocument = (name: string, target?: string) =>
     this.call<{ text: string; format: "ecore" | "xmi" | "henshin" | "henshin_text" }>("exportDocument", { name, target });
   convertFile = (path: string, to: "oclinecore" | "hutn") => this.call<{ text: string }>("convertFile", { path, to });

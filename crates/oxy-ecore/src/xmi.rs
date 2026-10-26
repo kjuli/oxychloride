@@ -182,7 +182,10 @@ impl Loader<'_> {
         let (ns, name) = el.resolve_qname_value(qname);
         let ns = ns.ok_or_else(|| self.error(el.offset, format!("no namespace declared for '{qname}'")))?;
         let package = self.mm.package_by_ns_uri(ns).ok_or_else(|| {
-            self.error(el.offset, format!("unknown package nsURI '{ns}' (load its .ecore metamodel first)"))
+            self.error(
+                el.offset,
+                format!("unknown package nsURI '{ns}' (register its metamodel, or load its .ecore file)"),
+            )
         })?;
         let class = self
             .mm

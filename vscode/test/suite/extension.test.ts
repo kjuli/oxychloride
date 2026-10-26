@@ -1,6 +1,7 @@
 // Drives the extension in a real VS Code: live diagnostics for HUTN and XMI models, the views,
 // creating objects, the OCL console, validation, metamodel diagrams, Henshin transformations and
-// their rule diagrams, and keeping a Henshin text and its `.henshin` file equivalent.
+// their rule diagrams, keeping a Henshin text and its `.henshin` file equivalent, and the package
+// registry.
 
 import * as assert from "node:assert";
 import * as fs from "node:fs";
@@ -21,11 +22,20 @@ interface Api {
     instantiate(uri: vscode.Uri, position?: vscode.Position, target?: vscode.Uri): Promise<vscode.Uri | undefined>;
   };
   metamodels: { packages: { name: string; classifiers: { name: string; qualifiedName: string }[] }[] };
+  registry: RegistryApi;
   models: { models: { uri: string; roots: { fragment: string; label: string; children: unknown[] }[] }[] };
   validation: { report?: { summary: { violated: number } } };
   diagrams(): DiagramView[];
   ruleDiagrams(): RuleDiagramView[];
   pairs: { settled(): Promise<void> };
+}
+
+/** The parts of the package registry the tests use. */
+interface RegistryApi {
+  infos: { uri: string; status: string; imports: { uri: string }[]; warnings: unknown[] }[];
+  register(file: vscode.Uri, uri: string): Promise<{ status: string } | undefined>;
+  unregister(uri: string): Promise<void>;
+  getChildren(): unknown[];
 }
 
 /** The parts of a rule diagram the tests use. */
@@ -431,6 +441,54 @@ describe("Oxychloride", () => {
     await view.edit({ kind: "setRuleOptions", element: "enrol", injectiveMatching: false });
     assert.ok(view.document.getText().includes('name="enrol" injectiveMatching="false"'), view.document.getText().slice(0, 2000));
     await vscode.commands.executeCommand("workbench.action.files.revert");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
+  it("registers metamodels under URIs that cannot be reached", async () => {
+    // orders.xml refers to shop.ecore by nsURI and by a platform: URI (the engine's fixtures).
+    const ext = vscode.extensions.getExtension("palladio.oxychloride")!;
+    const fixtures = path.join(ext.extensionPath, "../crates/oxychloride/tests/fixtures/registry");
+    const dir = path.join(folder(), "shop");
+    fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
+    fs.copyFileSync(path.join(fixtures, "orders.xml"), path.join(dir, "orders.xml"));
+    fs.copyFileSync(path.join(fixtures, "lib/shop.ecore"), path.join(dir, "lib/shop.ecore"));
+    const hutn = vscode.Uri.file(path.join(dir, "orders.hutn"));
+    fs.writeFileSync(
+      hutn.fsPath,
+      '@Spec { metamodel "orders" { nsUri: "http://example.org/orders" } }\norders { Order "o" { name: "first" items: Item "i" { price: 3 } } }\n',
+    );
+    await vscode.window.showTextDocument(hutn);
+    await waitFor("the unknown metamodel", () => errors(hutn).some((d) => d.message.includes("no metamodel with nsURI 'http://example.org/orders'")));
+    // A quick fix offers to register a file for the URI.
+    const range = errors(hutn)[0].range;
+    const actions = await vscode.commands.executeCommand<vscode.CodeAction[]>("vscode.executeCodeActionProvider", hutn, range);
+    assert.ok(actions.some((a) => a.title === "Register a metamodel file for 'http://example.org/orders'…"), actions.map((a) => a.title).join("\n"));
+
+    const registry = api.registry;
+    await registry.register(vscode.Uri.file(path.join(dir, "orders.xml")), "http://example.org/orders");
+    await registry.register(vscode.Uri.file(path.join(dir, "lib/shop.ecore")), "http://example.org/shop");
+    const info = await registry.register(vscode.Uri.file(path.join(dir, "lib/shop.ecore")), "platform:/plugin/org.example.shop/model/shop.ecore");
+    assert.strictEqual(info?.status, "loaded");
+    // The setting, with paths relative to the workspace folder.
+    const setting = vscode.workspace.getConfiguration("oxychloride", vscode.Uri.file(folder())).get<Record<string, string>>("registry");
+    assert.deepStrictEqual(setting, {
+      "http://example.org/orders": "shop/orders.xml",
+      "http://example.org/shop": "shop/lib/shop.ecore",
+      "platform:/plugin/org.example.shop/model/shop.ecore": "shop/lib/shop.ecore",
+    });
+    // The view: orders.xml imports shop.ecore; nothing is left unresolved.
+    const orders = registry.infos.find((i) => i.uri === "http://example.org/orders")!;
+    assert.deepStrictEqual(orders.imports.map((r) => path.basename(r.uri)), ["shop.ecore"]);
+    assert.deepStrictEqual(orders.warnings, []);
+    assert.strictEqual(registry.getChildren().length, 3);
+    await waitFor("the model to load", () => errors(hutn).length === 0);
+    await waitFor("the packages", () => api.metamodels.packages.some((p) => p.name === "orders"));
+
+    // Unregistering takes the metamodel away again.
+    await registry.unregister("http://example.org/orders");
+    await waitFor("the unknown metamodel again", () => errors(hutn).some((d) => d.message.includes("no metamodel with nsURI")));
+    for (const uri of ["http://example.org/shop", "platform:/plugin/org.example.shop/model/shop.ecore"]) await registry.unregister(uri);
+    assert.strictEqual(registry.infos.length, 0);
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
   });
 

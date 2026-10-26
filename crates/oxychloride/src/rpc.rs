@@ -9,7 +9,7 @@ use serde_json::{Value as Json, json};
 
 use std::collections::HashMap;
 
-use crate::protocol::{CodeRequest, Language, MetamodelEdit, ObjectRef, Position, TransformationEdit};
+use crate::protocol::{CodeRequest, Language, MetamodelEdit, ObjectRef, Position, RegistryEntry, TransformationEdit};
 use crate::transform::ExploreRequest;
 use crate::workspace::{Error, ValidateOptions, Workspace};
 
@@ -21,6 +21,8 @@ pub const METHODS: &[&str] = &[
     "loadEcore",
     "loadModel",
     "mapUri",
+    "registry",
+    "setRegistry",
     "reset",
     "clearModels",
     "reload",
@@ -108,6 +110,12 @@ struct LoadParams {
 struct MapUriParams {
     from: String,
     to: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistryParams {
+    entries: Vec<RegistryEntry>,
 }
 
 #[derive(Deserialize)]
@@ -378,6 +386,11 @@ impl Server {
                 let p: MapUriParams = params(p)?;
                 ws.map_uri(&p.from, &p.to);
                 Ok(Json::Null)
+            }
+            "registry" => to_json(ws.registry()),
+            "setRegistry" => {
+                let p: RegistryParams = params(p)?;
+                to_json(ws.set_registry(p.entries))
             }
             "reset" => {
                 ws.reset();

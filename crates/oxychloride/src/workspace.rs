@@ -104,7 +104,7 @@ impl Default for ValidateOptions {
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
     /// Metamodels loaded from `.ecore` files.
-    base_mm: Metamodel,
+    pub(crate) base_mm: Metamodel,
     /// `base_mm` plus the packages of the OCLinEcore documents.
     pub(crate) mm: Metamodel,
     /// Models loaded from XMI files.
@@ -125,7 +125,11 @@ pub struct Workspace {
     /// Problems reloading XMI models after their metamodel changed.
     model_problems: Vec<Diagnostic>,
     /// URI prefix mappings, e.g. `pathmap://PCM_MODELS/` → a local directory.
-    uri_mappings: Vec<(String, String)>,
+    pub(crate) uri_mappings: Vec<(String, String)>,
+    /// The package registry (see `registry.rs`), with locations made absolute.
+    pub(crate) registry: Vec<RegistryEntry>,
+    /// The state of each registry entry.
+    pub(crate) registry_state: Vec<crate::registry::EntryState>,
     /// Changes whenever `mm` is rebuilt or grows (transformation sessions refer to it).
     pub(crate) generation: u64,
     /// Transformation sessions (see `transform.rs`).
@@ -160,20 +164,12 @@ impl Workspace {
         self.finish();
     }
 
-    fn apply_mappings(&self, uri: &str) -> Option<String> {
-        self.uri_mappings.iter().find_map(|(from, to)| {
-            let rest = uri.strip_prefix(from.as_str())?;
-            let mapped = std::path::Path::new(to).join(rest);
-            Some(oxy_ecore::ecore_loader::canonical_uri(&mapped))
-        })
-    }
-
     /// Loads the model resource `uri` refers to, if it exists and is not loaded yet.
     fn demand_load(&mut self, uri: &str, loaded: &mut Vec<usize>, warnings: &mut Vec<Diagnostic>) {
         if self.xmi_model.resource_of_uri(uri).is_some() {
             return;
         }
-        let path = self.apply_mappings(uri).unwrap_or_else(|| uri.to_string());
+        let path = self.locator().locate_prefixed(uri).unwrap_or_else(|| uri.to_string());
         if let Some(r) = self.xmi_model.resource_of_uri(&path) {
             self.xmi_model.add_alias(r, uri);
         } else if Path::new(&path).is_file() {
@@ -206,7 +202,7 @@ impl Workspace {
         &self.model
     }
 
-    /// Removes everything.
+    /// Removes everything (the package registry too).
     pub fn reset(&mut self) {
         *self = Workspace::new();
     }
@@ -227,6 +223,7 @@ impl Workspace {
         let ecore = std::mem::take(&mut self.ecore_inputs);
         self.base_mm = Metamodel::new();
         self.mm = Metamodel::new();
+        self.load_registry();
         let mut problems = Vec::new();
         for input in ecore {
             let r = match &input {
@@ -368,18 +365,27 @@ impl Workspace {
     }
 
     fn load_ecore_file_inner(&mut self, path: &Path) -> Result<LoadResult, Error> {
-        let load = self.base_mm.load_ecore_file(path)?;
+        let load = self.load_metamodel_file(path)?;
         let uri = self.base_mm.resources()[load.resource].uri.clone();
         if !self.ecore_inputs.iter().any(|i| matches!(i, Input::File(p) if *p == uri)) {
-            self.ecore_inputs.push(Input::File(uri.clone()));
+            self.ecore_inputs.push(Input::File(uri));
         }
+        Ok(self.ecore_load_result(&load))
+    }
+
+    /// Loads an `.ecore` file (and the files it refers to, through the package registry) into
+    /// `base_mm` and `mm`.
+    pub(crate) fn load_metamodel_file(&mut self, path: &Path) -> Result<oxy_ecore::EcoreLoad, LoadError> {
+        let locator = self.locator();
+        let load = locator.load_file(&mut self.base_mm, path)?;
+        let uri = self.base_mm.resources()[load.resource].uri.clone();
         // Keep `mm` usable right away (a model being loaded may need the new packages). A
         // conflict with an OCLinEcore document is reported for the document once `mm` is
         // rebuilt.
-        let _ = self.mm.load_ecore_file(&uri);
+        let _ = locator.load_file(&mut self.mm, Path::new(&uri));
         self.generation += 1;
         self.metamodel_grew();
-        Ok(self.ecore_load_result(&load))
+        Ok(load)
     }
 
     /// Loads `.ecore` content. `uri` identifies the resource (and is used to resolve
@@ -391,9 +397,10 @@ impl Workspace {
     }
 
     fn load_ecore_str_inner(&mut self, text: &str, uri: &str) -> Result<LoadResult, Error> {
-        let load = self.base_mm.load_ecore_str(text, uri)?;
+        let locator = self.locator();
+        let load = locator.load_str(&mut self.base_mm, text, uri)?;
         self.ecore_inputs.push(Input::Text { uri: uri.to_string(), text: text.to_string() });
-        let _ = self.mm.load_ecore_str(text, uri);
+        let _ = locator.load_str(&mut self.mm, text, uri);
         self.generation += 1;
         self.metamodel_grew();
         Ok(self.ecore_load_result(&load))
@@ -489,7 +496,9 @@ impl Workspace {
         let missing: Vec<String> =
             doc.used_ns_uris().into_iter().filter(|ns| self.mm.package_by_ns_uri(ns).is_none()).collect();
         if !missing.is_empty() {
+            let locator = self.locator();
             for (ns, location) in doc.schema_locations() {
+                let location = locator.locate(&location).unwrap_or(location);
                 if missing.contains(&ns) && Path::new(&location).exists() {
                     let r = self.load_ecore_file_inner(Path::new(&location))?;
                     warnings.extend(r.warnings);
@@ -611,7 +620,9 @@ impl Workspace {
         let Ok(doc) = XmiDocument::parse(text, name) else { return };
         let missing: Vec<String> =
             doc.used_ns_uris().into_iter().filter(|ns| self.mm.package_by_ns_uri(ns).is_none()).collect();
+        let locator = self.locator();
         for (ns, location) in doc.schema_locations() {
+            let location = locator.locate(&location).unwrap_or(location);
             if missing.contains(&ns) && location.ends_with(".ecore") && Path::new(&location).is_file() {
                 let _ = self.load_ecore_file_inner(Path::new(&location));
             }
@@ -632,7 +643,8 @@ impl Workspace {
             if target.is_empty() || target == oxy_ecore::ECORE_NS_URI {
                 continue;
             }
-            if self.base_mm.package_by_ns_uri(target).is_some() {
+            // A loaded package's nsURI, or a URI a loaded file is known by (e.g. a registered one).
+            if self.base_mm.package_by_ns_uri(target).is_some() || self.base_mm.resource_of_uri(target).is_some() {
                 continue;
             }
             // A package of an OCLinEcore document, by nsURI.
@@ -642,7 +654,10 @@ impl Workspace {
                 depends_on.push(doc.clone());
                 continue;
             }
-            let path = oxy_ecore::ecore_loader::resolve_relative(name, target);
+            let path = self
+                .locator()
+                .locate(target)
+                .unwrap_or_else(|| oxy_ecore::ecore_loader::resolve_relative(name, target));
             if Language::from_path(&path) == Language::OclInEcore {
                 match self.documents.keys().find(|d| *d == &path || Path::new(d.as_str()) == Path::new(&path)) {
                     Some(d) => depends_on.push(d.clone()),
@@ -661,9 +676,11 @@ impl Workspace {
                 let file = target.rsplit('/').next().unwrap_or("");
                 let known = self.base_mm.resources().iter().any(|r| r.uri.rsplit(['/', '\\']).next() == Some(file));
                 if !known {
+                    let hint =
+                        if target.contains(':') { ": register a file for it in the package registry" } else { "" };
                     diags.push(oxy_ocl::Diagnostic::error(
                         import.span,
-                        format!("cannot find imported metamodel '{}'", import.uri),
+                        format!("cannot find imported metamodel '{}'{hint}", import.uri),
                     ));
                 }
                 continue;
@@ -1206,15 +1223,17 @@ impl Workspace {
         match to {
             Language::OclInEcore => {
                 let mut mm = self.base_mm.clone();
-                let load = mm.load_ecore_file(path)?;
+                let load = self.locator().load_file(&mut mm, Path::new(path))?;
                 Ok(oclinecore::print(&mm, load.resource))
             }
             Language::Hutn => {
                 let doc = XmiDocument::read_file(path)?;
                 let mut mm = self.mm.clone();
+                let locator = self.locator();
                 for (ns, location) in doc.schema_locations() {
+                    let location = locator.locate(&location).unwrap_or(location);
                     if mm.package_by_ns_uri(&ns).is_none() && Path::new(&location).exists() {
-                        mm.load_ecore_file(&location)?;
+                        locator.load_file(&mut mm, Path::new(&location))?;
                     }
                 }
                 let mut model = Model::new();
@@ -1559,7 +1578,7 @@ fn convert_diagnostic(source: &oxy_ocl::Source, d: &oxy_ocl::Diagnostic) -> Diag
     }
 }
 
-fn load_diagnostic(e: &LoadError) -> Diagnostic {
+pub(crate) fn load_diagnostic(e: &LoadError) -> Diagnostic {
     let pos = e.location.map(|(l, c)| Position { line: l as u32 - 1, column: c as u32 - 1 }).unwrap_or_default();
     Diagnostic {
         severity: Severity::Warning,

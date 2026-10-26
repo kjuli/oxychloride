@@ -217,7 +217,17 @@ pub struct Operation {
 pub struct EcoreResource {
     /// Canonical path or URI the resource was loaded from.
     pub uri: String,
+    /// Other URIs the resource is known by, e.g. a placeholder URI that a package registry
+    /// maps to the file (`http://example.org/shop.ecore` → `/models/shop.ecore`).
+    pub aliases: Vec<String>,
     pub roots: Vec<PackageId>,
+}
+
+impl EcoreResource {
+    /// Whether the resource is known by `uri` (its own URI or an alias).
+    pub fn is_named(&self, uri: &str) -> bool {
+        self.uri == uri || self.aliases.iter().any(|a| a == uri)
+    }
 }
 
 /// Any addressable metamodel element.
@@ -340,7 +350,47 @@ impl Metamodel {
     }
 
     pub fn resource_of_uri(&self, uri: &str) -> Option<usize> {
-        self.resources.iter().position(|r| r.uri == uri)
+        self.resources.iter().position(|r| r.is_named(uri))
+    }
+
+    /// Makes a loaded resource known by another URI too (see [`EcoreResource::aliases`]).
+    pub fn add_resource_alias(&mut self, resource: usize, uri: &str) {
+        let r = &mut self.resources[resource];
+        if !r.is_named(uri) {
+            r.aliases.push(uri.to_string());
+        }
+    }
+
+    /// The other resources whose classifiers the elements of `resource` refer to (as types and
+    /// supertypes), in order of first use. Ecore's own resource is included when used.
+    pub fn referenced_resources(&self, resource: usize) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut note = |c: Option<ClassifierId>| {
+            if let Some(c) = c {
+                let r = self.package(self.classifier(c).package).resource;
+                if r != resource && !out.contains(&r) {
+                    out.push(r);
+                }
+            }
+        };
+        let mut packages = self.resources[resource].roots.clone();
+        while let Some(p) = packages.pop() {
+            let pkg = self.package(p);
+            packages.extend(&pkg.subpackages);
+            for &c in &pkg.classifiers {
+                let Some(data) = self.class_data(c) else { continue };
+                data.super_types.iter().for_each(|s| note(Some(*s)));
+                for &f in &data.features {
+                    note(self.feature(f).ty);
+                }
+                for &o in &data.operations {
+                    let op = self.operation(o);
+                    note(op.ty);
+                    op.params.iter().for_each(|p| note(p.ty));
+                }
+            }
+        }
+        out
     }
 
     /// Resolves an Ecore URI fragment such as `//Library/books` inside a loaded resource.
@@ -535,7 +585,7 @@ impl Metamodel {
     /// Adds an (empty) resource and returns its index. Its root packages are set by
     /// [`Metamodel::finish_resource`].
     pub fn add_resource(&mut self, uri: impl Into<String>) -> usize {
-        self.resources.push(EcoreResource { uri: uri.into(), roots: Vec::new() });
+        self.resources.push(EcoreResource { uri: uri.into(), aliases: Vec::new(), roots: Vec::new() });
         self.resources.len() - 1
     }
 

@@ -19,8 +19,16 @@ pub struct EcoreLoad {
     pub dependencies: Vec<usize>,
 }
 
-/// Fetches the text of a referenced resource, given its resolved URI.
-pub type Fetch<'a> = dyn FnMut(&str) -> Option<String> + 'a;
+/// Fetches a referenced resource, given its URI (resolved against the referencing resource):
+/// returns the URI to load it as (normally its canonical path) and its text. A fetch may map
+/// URIs to other locations, like EMF's URI converter or package registry; the resource is then
+/// known by both (see [`EcoreResource::aliases`]).
+pub type Fetch<'a> = dyn FnMut(&str) -> Option<(String, String)> + 'a;
+
+/// Reads referenced resources from disk, by path.
+pub fn read_from_disk(uri: &str) -> Option<(String, String)> {
+    std::fs::read_to_string(uri).ok().map(|text| (uri.to_string(), text))
+}
 
 /// Loads an `.ecore` document from a string. Cross-file references can only be resolved
 /// against resources that are already loaded.
@@ -30,6 +38,15 @@ pub fn load_str(mm: &mut Metamodel, text: &str, uri: &str) -> Result<EcoreLoad, 
 
 /// Loads an `.ecore` file, loading referenced `.ecore` files from disk as needed.
 pub fn load_file(mm: &mut Metamodel, path: impl AsRef<Path>) -> Result<EcoreLoad, LoadError> {
+    load_file_with(mm, path, &mut read_from_disk)
+}
+
+/// Loads an `.ecore` file, using `fetch` to obtain referenced resources.
+pub fn load_file_with(
+    mm: &mut Metamodel,
+    path: impl AsRef<Path>,
+    fetch: &mut Fetch<'_>,
+) -> Result<EcoreLoad, LoadError> {
     let uri = canonical_uri(path.as_ref());
     if let Some(resource) = mm.resource_of_uri(&uri) {
         return Ok(EcoreLoad {
@@ -40,7 +57,7 @@ pub fn load_file(mm: &mut Metamodel, path: impl AsRef<Path>) -> Result<EcoreLoad
         });
     }
     let text = std::fs::read_to_string(&uri).map_err(|e| LoadError::new(&uri, format!("cannot read file: {e}")))?;
-    load_with(mm, &text, &uri, &mut |dep| std::fs::read_to_string(dep).ok())
+    load_with(mm, &text, &uri, fetch)
 }
 
 /// Loads an `.ecore` document, using `fetch` to obtain referenced resources.
@@ -388,22 +405,32 @@ fn resolve_href(
             Some(r) => r,
             None => {
                 // `platform:/plugin/...` and `platform:/resource/...` URIs cannot be resolved
-                // without an Eclipse installation; fall back to a file with the same name next
-                // to the referencing file (the usual layout when metamodels are copied together).
-                let candidates = if target_uri.starts_with("platform:") {
+                // without an Eclipse installation (unless `fetch` maps them); fall back to a file
+                // with the same name next to the referencing file (the usual layout when
+                // metamodels are copied together).
+                let mut candidates = vec![resolved.clone()];
+                if target_uri.starts_with("platform:") {
                     let file = target_uri.rsplit('/').next().unwrap_or(target_uri);
-                    vec![resolve_relative(base, file)]
-                } else {
-                    vec![resolved]
-                };
-                let (uri, text) = candidates.into_iter().find_map(|c| fetch(&c).map(|t| (c, t)))?;
-                if let Some(r) = mm.resource_of_uri(&uri) {
-                    return mm.resolve_fragment(r, fragment);
+                    candidates.push(resolve_relative(base, file));
                 }
-                let loaded = load_with(mm, &text, &uri, fetch).ok()?;
-                dependencies.push(loaded.resource);
-                dependencies.extend(loaded.dependencies);
-                loaded.resource
+                let (location, text) = candidates.into_iter().find_map(|c| fetch(&c))?;
+                let r = match mm.resource_of_uri(&location) {
+                    Some(r) => r,
+                    None => {
+                        let loaded = load_with(mm, &text, &location, fetch).ok()?;
+                        dependencies.push(loaded.resource);
+                        dependencies.extend(loaded.dependencies);
+                        loaded.resource
+                    }
+                };
+                if location != resolved {
+                    mm.add_resource_alias(r, &resolved);
+                }
+                // The nsURI of a package the fetched resource defines.
+                if let Some(p) = mm.package_by_ns_uri(target_uri) {
+                    return mm.resolve_in_package(p, fragment.trim_start_matches('/'));
+                }
+                r
             }
         },
     };

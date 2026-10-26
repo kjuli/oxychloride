@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- An Ecore metamodel under another extension. It refers to shop.ecore by its nsURI and by a
+     platform: URI, neither of which can be resolved without a package registry. -->
+<ecore:EPackage xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:ecore="http://www.eclipse.org/emf/2002/Ecore" name="orders" nsURI="http://example.org/orders" nsPrefix="orders">
+  <eClassifiers xsi:type="ecore:EClass" name="Order" eSuperTypes="platform:/plugin/org.example.shop/model/shop.ecore#//Named">
+    <eStructuralFeatures xsi:type="ecore:EReference" name="items" upperBound="-1" eType="ecore:EClass http://example.org/shop#//Item"
+        containment="true"/>
+  </eClassifiers>
+</ecore:EPackage>

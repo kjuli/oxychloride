@@ -9,7 +9,9 @@
 //!   and Henshin files (texts and `.henshin` models) of the workspace folders are loaded as well
 //!   (from disk while they are not open), so models find their metamodels and constraints, and
 //!   transformations their rules, without opening them. A changed `.ecore`
-//!   file that is loaded reloads the metamodels;
+//!   file that is loaded (or registered) reloads the metamodels. The package registry
+//!   (`setRegistry`) can be given as `initializationOptions.registry`, so that it is there
+//!   before the workspace folders are loaded;
 //! * once changes settle, the diagnostics of all documents are published: models are checked
 //!   against the constraints (invariants, pre- and postconditions) as they are edited;
 //! * hover and completion;
@@ -17,8 +19,8 @@
 //!   `validate`, `packages`, `models`, `createObject`, `schemas`, the transformation methods, …,
 //!   see `docs/PROTOCOL.md`).
 //!   Positions in its parameters and results count Unicode scalar values, like the engine's;
-//! * the notification `oxychloride/workspaceChanged` tells the client that the packages or
-//!   models changed (e.g. to refresh views).
+//! * the notification `oxychloride/workspaceChanged` tells the client that the packages,
+//!   models or the state of the package registry changed (e.g. to refresh views).
 //!
 //! LSP positions count UTF-16 code units; they are converted using the document text.
 
@@ -43,8 +45,17 @@ const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "out", "dist", "build"
 const MAX_DEPTH: usize = 12;
 
 /// Engine methods that change the workspace (diagnostics are published again after them).
-const MUTATING_METHODS: &[&str] =
-    &["loadEcore", "loadModel", "mapUri", "reset", "clearModels", "reload", "openDocument", "closeDocument"];
+const MUTATING_METHODS: &[&str] = &[
+    "loadEcore",
+    "loadModel",
+    "mapUri",
+    "setRegistry",
+    "reset",
+    "clearModels",
+    "reload",
+    "openDocument",
+    "closeDocument",
+];
 
 /// Serves LSP on stdin/stdout until the client exits.
 pub fn run_stdio() -> Result<()> {
@@ -59,6 +70,11 @@ pub fn run_stdio() -> Result<()> {
 pub fn serve(connection: &Connection) -> Result<()> {
     let params = connection.initialize(capabilities())?;
     let mut server = LspServer::new(connection.sender.clone());
+    // The package registry first, so that the workspace files find registered metamodels.
+    if let Some(entries) = params.pointer("/initializationOptions/registry") {
+        let entries = serde_json::from_value(entries.clone()).unwrap_or_default();
+        server.ws().set_registry(entries);
+    }
     server.index(&workspace_folders(&params));
     loop {
         let message = if server.dirty {
@@ -166,7 +182,7 @@ struct LspServer {
     indexed: HashSet<String>,
     /// The diagnostics last published, by URI.
     published: HashMap<String, Json>,
-    /// The packages and models last announced (as JSON text).
+    /// The packages, models and registry entries last announced (as JSON text).
     browsed: String,
     /// Diagnostics must be published again.
     dirty: bool,
@@ -308,9 +324,12 @@ impl LspServer {
                 let mut reload = false;
                 for change in p.get("changes").and_then(Json::as_array).into_iter().flatten() {
                     let Some(path) = change.get("uri").and_then(Json::as_str).and_then(uri_to_path) else { continue };
-                    if path.to_ascii_lowercase().ends_with(".ecore") {
-                        // Only metamodels in use; not e.g. one generated from an OCLinEcore document.
-                        reload |= self.rpc.workspace().metamodel().resource_of_uri(&path).is_some();
+                    let ws = self.rpc.workspace();
+                    let registered = ws.registry_entries().iter().any(|e| Path::new(&e.location) == Path::new(&path));
+                    if path.to_ascii_lowercase().ends_with(".ecore") || registered {
+                        // Only metamodels in use (loaded or registered); not e.g. one generated
+                        // from an OCLinEcore document.
+                        reload |= registered || ws.metamodel().resource_of_uri(&path).is_some();
                     } else if change.get("type").and_then(Json::as_u64) == Some(3) {
                         if self.indexed.contains(&path) {
                             self.forget(&path);
@@ -450,7 +469,7 @@ impl LspServer {
         }
         self.published = next;
         let ws = self.rpc.workspace();
-        let browsed = json!([ws.packages(), ws.models()]).to_string();
+        let browsed = json!([ws.packages(), ws.models(), ws.registry()]).to_string();
         if browsed != self.browsed {
             self.browsed = browsed;
             self.notify("oxychloride/workspaceChanged", Json::Null);
