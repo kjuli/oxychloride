@@ -1,0 +1,27 @@
+-- The dining philosophers, a classic example of Henshin's state space exploration: three
+-- philosophers sit at a round table with a fork between each two of them. To eat, a
+-- philosopher needs both forks next to them.
+--
+-- Explore the states the rules of philosophers.henshin_text reach from philosophers.hutn:
+-- the invariant NoDeadlock marks the state in which nobody can eat any more.
+
+package philosophers : phil = 'http://www.example.org/philosophers/1.0' {
+  class Table {
+    property philosophers : Philosopher[*] { ordered, composes };
+    property forks : Fork[*] { ordered, composes };
+    invariant NoDeadlock('every philosopher holds one fork and waits for the other one'):
+      not philosophers->forAll(p | p.holds->size() = 1);
+  }
+
+  class Philosopher {
+    attribute name : String;
+    property left : Fork;
+    property right : Fork;
+    property holds#holder : Fork[*];
+  }
+
+  class Fork {
+    attribute number : Integer;
+    property holder#holds : Philosopher[?];
+  }
+}

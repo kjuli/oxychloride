@@ -1,0 +1,440 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Henshin",
+  "scopeName": "source.henshin",
+  "fileTypes": [
+    "henshin_text"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#import"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#node"
+    },
+    {
+      "include": "#reuse"
+    },
+    {
+      "include": "#edge"
+    },
+    {
+      "include": "#named-block"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#actions"
+    },
+    {
+      "include": "#attribute"
+    },
+    {
+      "include": "#call"
+    },
+    {
+      "include": "#expression"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.henshin",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.henshin"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.henshin"
+            }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.henshin",
+          "match": "(//).*$",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.henshin"
+            }
+          }
+        }
+      ]
+    },
+    "import": {
+      "comment": "ePackageImport bank",
+      "match": "\\b(ePackageImport)\\b\\s*([\\p{L}_][\\w]*(?:\\s*\\.\\s*[\\p{L}_][\\w]*)*)?",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.henshin"
+        },
+        "2": {
+          "name": "entity.name.namespace.henshin"
+        }
+      }
+    },
+    "declaration": {
+      "comment": "rule name(IN p:Type, ...) / unit name(...)",
+      "begin": "\\b(rule|unit)\\b\\s*([\\p{L}_][\\w]*)?\\s*(\\()",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.$1.henshin"
+        },
+        "2": {
+          "name": "entity.name.function.henshin"
+        },
+        "3": {
+          "name": "punctuation.definition.parameters.begin.henshin"
+        }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.end.henshin"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#parameter"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.henshin"
+        }
+      ]
+    },
+    "parameter": {
+      "match": "(?:\\b(IN|OUT|INOUT|VAR)\\b\\s*)?([\\p{L}_][\\w]*)\\s*(:)\\s*([\\p{L}_][\\w]*(?:\\s*\\.\\s*[\\p{L}_][\\w]*)*)?",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.parameter-kind.henshin"
+        },
+        "2": {
+          "name": "variable.parameter.henshin"
+        },
+        "3": {
+          "name": "punctuation.separator.colon.henshin"
+        },
+        "4": {
+          "patterns": [
+            {
+              "include": "#type"
+            }
+          ]
+        }
+      }
+    },
+    "type": {
+      "patterns": [
+        {
+          "match": "\\bE(?:String|Int|Boolean|Double|Float|Long|Short|Byte|Char|BigInteger|BigDecimal|Date|IntegerObject|DoubleObject|BooleanObject|FloatObject|LongObject|ShortObject|ByteObject|CharacterObject|JavaObject|JavaClass|ByteArray|EList|Enumerator|FeatureMap|FeatureMapEntry|Map|Resource|ResourceSet|TreeIterator|DiagnosticChain|InvocationTargetException)\\b",
+          "name": "support.type.primitive.henshin"
+        },
+        {
+          "match": "([\\p{L}_][\\w]*)(\\s*\\.\\s*)(?=[\\p{L}_])",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.henshin"
+            },
+            "2": {
+              "name": "punctuation.separator.dot.henshin"
+            }
+          }
+        },
+        {
+          "match": "[\\p{L}_][\\w]*",
+          "name": "entity.name.type.class.henshin"
+        }
+      ]
+    },
+    "node": {
+      "comment": "[action] node name : Type",
+      "match": "(?:\\b(preserve|create|delete|forbid|require)\\s+)?\\b(node)\\s+([\\p{L}_][\\w]*)?\\s*(:)?\\s*([\\p{L}_][\\w]*(?:\\s*\\.\\s*[\\p{L}_][\\w]*)*)?",
+      "captures": {
+        "1": {
+          "patterns": [
+            {
+              "include": "#actions"
+            }
+          ]
+        },
+        "2": {
+          "name": "storage.type.node.henshin"
+        },
+        "3": {
+          "name": "variable.other.node.henshin"
+        },
+        "4": {
+          "name": "punctuation.separator.colon.henshin"
+        },
+        "5": {
+          "patterns": [
+            {
+              "include": "#type"
+            }
+          ]
+        }
+      }
+    },
+    "reuse": {
+      "match": "\\b(reuse)\\s+([\\p{L}_][\\w]*)?",
+      "captures": {
+        "1": {
+          "name": "storage.type.reuse.henshin"
+        },
+        "2": {
+          "name": "variable.other.node.henshin"
+        }
+      }
+    },
+    "edge": {
+      "comment": "(action source -> target : reference)",
+      "match": "(\\()\\s*(?:(preserve|create|delete|forbid|require)\\s+)?([\\p{L}_][\\w]*)\\s*(->)\\s*([\\p{L}_][\\w]*)?\\s*(:)?\\s*([\\p{L}_][\\w]*(?:\\s*\\.\\s*[\\p{L}_][\\w]*)*)?\\s*(\\))?",
+      "captures": {
+        "1": {
+          "name": "punctuation.section.parens.begin.henshin"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#actions"
+            }
+          ]
+        },
+        "3": {
+          "name": "variable.other.node.henshin"
+        },
+        "4": {
+          "name": "keyword.operator.arrow.henshin"
+        },
+        "5": {
+          "name": "variable.other.node.henshin"
+        },
+        "6": {
+          "name": "punctuation.separator.colon.henshin"
+        },
+        "7": {
+          "name": "variable.other.property.reference.henshin"
+        },
+        "8": {
+          "name": "punctuation.section.parens.end.henshin"
+        }
+      }
+    },
+    "named-block": {
+      "comment": "multiRule name / conditionGraph name",
+      "match": "\\b(multiRule|conditionGraph)\\s+([\\p{L}_][\\w]*)?",
+      "captures": {
+        "1": {
+          "name": "storage.type.$1.henshin"
+        },
+        "2": {
+          "name": "entity.name.function.henshin"
+        }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(?:graph|edges|matchingFormula|formula|conditions|javaImport|checkDangling|injectiveMatching|strict|rollback)\\b",
+          "name": "keyword.other.henshin"
+        },
+        {
+          "match": "\\b(?:if|then|else|for|while|independent|priority)\\b",
+          "name": "keyword.control.henshin"
+        },
+        {
+          "match": "\\b(?:AND|OR|XOR)\\b",
+          "name": "keyword.operator.logical.henshin"
+        }
+      ]
+    },
+    "actions": {
+      "patterns": [
+        {
+          "match": "\\bpreserve\\b",
+          "name": "keyword.other.action.preserve.henshin"
+        },
+        {
+          "match": "\\bcreate\\b",
+          "name": "keyword.other.action.create.henshin markup.inserted.henshin"
+        },
+        {
+          "match": "\\bdelete\\b",
+          "name": "keyword.other.action.delete.henshin markup.deleted.henshin"
+        },
+        {
+          "match": "\\bforbid\\b",
+          "name": "keyword.other.action.forbid.henshin markup.changed.henshin"
+        },
+        {
+          "match": "\\brequire\\b",
+          "name": "keyword.other.action.require.henshin"
+        },
+        {
+          "match": "\\bset\\b",
+          "name": "keyword.other.action.set.henshin"
+        }
+      ]
+    },
+    "attribute": {
+      "comment": "[action|set] name = value",
+      "match": "(?:\\b(preserve|create|delete|forbid|require|set)\\s+)?([\\p{L}_][\\w]*)\\s*(=)(?!=)",
+      "captures": {
+        "1": {
+          "patterns": [
+            {
+              "include": "#actions"
+            }
+          ]
+        },
+        "2": {
+          "name": "variable.other.property.henshin"
+        },
+        "3": {
+          "name": "keyword.operator.assignment.henshin"
+        }
+      }
+    },
+    "call": {
+      "comment": "A call of a rule or unit (or a Java call in an expression).",
+      "match": "\\b([\\p{L}_][\\w]*)(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.call.henshin"
+        }
+      }
+    },
+    "expression": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.henshin",
+          "begin": "\"",
+          "end": "\"|$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.henshin"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.henshin"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.henshin"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.henshin",
+          "begin": "'",
+          "end": "'|$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.henshin"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.henshin"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.henshin"
+            }
+          ]
+        },
+        {
+          "match": "(?<![\\w.])\\d+\\.\\d+\\b",
+          "name": "constant.numeric.float.henshin"
+        },
+        {
+          "match": "(?<![\\w.])\\d+\\b",
+          "name": "constant.numeric.integer.henshin"
+        },
+        {
+          "match": "\\b(?:true|false)\\b",
+          "name": "constant.language.boolean.henshin"
+        },
+        {
+          "comment": "Kind.LITERAL: an enumeration literal",
+          "match": "\\b(\\p{Lu}[\\w]*)(\\.)(\\p{Lu}[\\p{Lu}\\d_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.enum.henshin"
+            },
+            "2": {
+              "name": "punctuation.separator.dot.henshin"
+            },
+            "3": {
+              "name": "variable.other.enummember.henshin"
+            }
+          }
+        },
+        {
+          "match": "->",
+          "name": "keyword.operator.arrow.henshin"
+        },
+        {
+          "match": "==|!=|>=|<=|>|<",
+          "name": "keyword.operator.comparison.henshin"
+        },
+        {
+          "match": "[+\\-*/]",
+          "name": "keyword.operator.arithmetic.henshin"
+        },
+        {
+          "match": "!",
+          "name": "keyword.operator.logical.henshin"
+        },
+        {
+          "match": "=",
+          "name": "keyword.operator.assignment.henshin"
+        },
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.braces.henshin"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.section.brackets.henshin"
+        },
+        {
+          "match": "[()]",
+          "name": "punctuation.section.parens.henshin"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.henshin"
+        },
+        {
+          "match": ":",
+          "name": "punctuation.separator.colon.henshin"
+        },
+        {
+          "match": "[\\p{L}_][\\w]*",
+          "name": "variable.other.henshin"
+        }
+      ]
+    }
+  }
+}

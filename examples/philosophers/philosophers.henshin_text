@@ -1,0 +1,49 @@
+// The rules of the dining philosophers. Explore their state space from philosophers.hutn
+// ("Explore State Space"): every philosopher picks up the left fork, then the right one,
+// eats and puts both down. One state is a deadlock.
+
+ePackageImport philosophers
+
+// A philosopher picks up the fork on their left, if nobody holds it (a matching formula of
+// two condition graphs).
+rule takeLeft() {
+	graph {
+		node p:Philosopher
+		node fork:Fork
+		edges [(p->fork:left), (create p->fork:holds)]
+		matchingFormula {
+			formula !heldByOther AND !heldByMe
+			conditionGraph heldByOther {
+				node other:Philosopher
+				edges [(other->fork:holds)]
+			}
+			conditionGraph heldByMe {
+				edges [(p->fork:holds)]
+			}
+		}
+	}
+}
+
+// A philosopher holding their left fork picks up the right one, if nobody (themselves
+// included: matching is not injective) holds it.
+rule takeRight() {
+	injectiveMatching false
+	graph {
+		node p:Philosopher
+		node left:Fork
+		node right:Fork
+		edges [(p->left:left), (p->right:right), (p->left:holds), (create p->right:holds)]
+		forbid node holder:Philosopher
+		edges [(forbid holder->right:holds)]
+	}
+}
+
+// A philosopher who holds both forks eats and puts them down.
+rule release() {
+	graph {
+		node p:Philosopher
+		node left:Fork
+		node right:Fork
+		edges [(p->left:left), (p->right:right), (delete p->left:holds), (delete p->right:holds)]
+	}
+}

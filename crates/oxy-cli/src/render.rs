@@ -24,7 +24,7 @@ impl Renderer {
         self.paint("1;31", s)
     }
 
-    fn warning(&self, s: &str) -> String {
+    pub fn warning(&self, s: &str) -> String {
         self.paint("1;33", s)
     }
 

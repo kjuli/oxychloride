@@ -1,18 +1,21 @@
-//! A language server (LSP over stdio) for Complete OCL, OCLinEcore, HUTN and XMI documents.
+//! A language server (LSP over stdio) for Complete OCL, OCLinEcore, HUTN, XMI and Henshin
+//! documents.
 //!
-//! The server keeps an [`rpc::Server`] — the one behind `oxy serve`, the C ABI and the desktop
-//! app — and maps the standard LSP features onto its workspace:
+//! The server keeps an [`rpc::Server`] — the one behind `oxy serve` and the C ABI — and maps
+//! the standard LSP features onto its workspace:
 //!
 //! * documents open in the editor are workspace documents, named by their path (or, if unsaved,
-//!   their URI); the language comes from the editor's language id. The OCLinEcore and Complete OCL
-//!   files of the workspace folders are loaded as well (from disk while they are not open), so
-//!   models find their metamodels and constraints without opening them. A changed `.ecore`
+//!   their URI); the language comes from the editor's language id. The OCLinEcore, Complete OCL
+//!   and Henshin files (texts and `.henshin` models) of the workspace folders are loaded as well
+//!   (from disk while they are not open), so models find their metamodels and constraints, and
+//!   transformations their rules, without opening them. A changed `.ecore`
 //!   file that is loaded reloads the metamodels;
 //! * once changes settle, the diagnostics of all documents are published: models are checked
 //!   against the constraints (invariants, pre- and postconditions) as they are edited;
 //! * hover and completion;
 //! * the request `oxychloride/rpc` (`{method, params}`) calls any engine method (`evaluate`,
-//!   `validate`, `packages`, `models`, `createObject`, `schemas`, …, see `docs/PROTOCOL.md`).
+//!   `validate`, `packages`, `models`, `createObject`, `schemas`, the transformation methods, …,
+//!   see `docs/PROTOCOL.md`).
 //!   Positions in its parameters and results count Unicode scalar values, like the engine's;
 //! * the notification `oxychloride/workspaceChanged` tells the client that the packages or
 //!   models changed (e.g. to refresh views).
@@ -121,6 +124,8 @@ fn language_of(path: &str) -> Option<Language> {
         "oclinecore" => Some(Language::OclInEcore),
         "hutn" => Some(Language::Hutn),
         "xmi" => Some(Language::Xmi),
+        "henshin_text" => Some(Language::Henshin),
+        "henshin" => Some(Language::HenshinModel),
         _ => None,
     }
 }
@@ -131,7 +136,8 @@ fn editor_language(name: &str, language_id: &str) -> Option<Language> {
         "ocl" => Some(Language::Ocl),
         "oclinecore" => Some(Language::OclInEcore),
         "hutn" => Some(Language::Hutn),
-        // Only `.xmi` files of all XML documents are models.
+        "henshin" => Some(Language::Henshin),
+        // Of all XML documents, `.xmi` files are models and `.henshin` files transformations.
         _ => language_of(name),
     }
 }
@@ -144,7 +150,7 @@ pub fn document_name(uri: &str) -> String {
 
 /// Whether files of a language are loaded from the workspace folders even when not open.
 fn is_indexed(language: Language) -> bool {
-    matches!(language, Language::Ocl | Language::OclInEcore)
+    matches!(language, Language::Ocl | Language::OclInEcore | Language::Henshin | Language::HenshinModel)
 }
 
 struct LspServer {
@@ -365,7 +371,12 @@ impl LspServer {
     fn hover(&self, params: &Json) -> Json {
         let Some((path, text, position)) = self.position(params) else { return Json::Null };
         let Some(info) = self.rpc.workspace().hover(&path, position) else { return Json::Null };
-        let language = self.rpc.workspace().document_language(&path).map_or("ocl", Language::extension);
+        // The code block's language is the editor's language id.
+        let language = match self.rpc.workspace().document_language(&path) {
+            Some(Language::Henshin | Language::HenshinModel) => "henshin",
+            Some(l) => l.extension(),
+            None => "ocl",
+        };
         json!({
             "contents": { "kind": "markdown", "value": format!("```{language}\n{}\n```", info.contents) },
             "range": lsp_range(Some(&text), info.range),

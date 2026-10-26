@@ -1,7 +1,7 @@
 {
   "name": "oxychloride",
   "displayName": "Oxychloride: OCL for Ecore models",
-  "description": "Metamodels in OCLinEcore, models in HUTN and XMI, checked live against their OCL invariants, pre- and postconditions; an OCL console.",
+  "description": "Metamodels in OCLinEcore and Ecore, edited as text or as diagrams; models in HUTN and XMI, checked live against their OCL invariants, pre- and postconditions; an OCL console; Henshin graph transformations, as text or as rule diagrams in Henshin's notation (.henshin files of Henshin's editors included, kept equivalent to their text), with a step-by-step view and state space exploration.",
   "version": "0.1.0",
   "publisher": "palladio",
   "repository": {
@@ -21,11 +21,15 @@
     "EMF",
     "OCLinEcore",
     "HUTN",
-    "XMI"
+    "XMI",
+    "Henshin",
+    "graph transformation",
+    "diagram",
+    "model transformation"
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi}",
+    "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi,henshin_text,henshin}",
     "onLanguage:xml"
   ],
   "contributes": {
@@ -76,10 +80,26 @@
         }
       },
       {
+        "id": "henshin",
+        "aliases": [
+          "Henshin",
+          "henshin"
+        ],
+        "extensions": [
+          ".henshin_text"
+        ],
+        "configuration": "./language-configuration/henshin.json",
+        "icon": {
+          "light": "./media/file-icons/henshin.svg",
+          "dark": "./media/file-icons/henshin-dark.svg"
+        }
+      },
+      {
         "id": "xml",
         "extensions": [
           ".xmi",
-          ".ecore"
+          ".ecore",
+          ".henshin"
         ]
       }
     ],
@@ -101,6 +121,11 @@
         "language": "hutn",
         "scopeName": "source.hutn",
         "path": "./syntaxes/hutn.tmLanguage.json"
+      },
+      {
+        "language": "henshin",
+        "scopeName": "source.henshin",
+        "path": "./syntaxes/henshin.tmLanguage.json"
       }
     ],
     "configuration": {
@@ -121,6 +146,16 @@
           "default": true,
           "markdownDescription": "Generate XML Schemas for the loaded metamodels and register them with the XML extension (`redhat.vscode-xml`), so that XMI models are validated and completed as XML."
         },
+        "oxychloride.codegen.target": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The language **Generate Code…** generates (`python` or `rust`). Empty: ask, suggesting the one used last."
+        },
+        "oxychloride.codegen.outputFolder": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The folder **Generate Code…** writes into: absolute, or relative to the workspace folder of the metamodel (e.g. `generated`). The code goes into a subfolder named after the package (`generated/university/…`). Empty: ask, suggesting the folder used last for the metamodel."
+        },
         "oxychloride.validation.includeSatisfied": {
           "type": "boolean",
           "default": false,
@@ -135,6 +170,11 @@
           ],
           "default": "off",
           "description": "Trace the communication with the language server."
+        },
+        "oxychloride.henshin.syncPairs": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Keep a Henshin text (`rules.henshin_text`) and the Henshin model of the same name next to it (`rules.henshin`, as Henshin's graphical editors write it) equivalent: a change of either changes the other (saved together). Skipped while the changed document has errors."
         }
       }
     },
@@ -206,6 +246,16 @@
       {
         "command": "oxychloride.createXmiInstance",
         "title": "Create Dynamic Instance (XMI)…",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.instantiateMetamodel",
+        "title": "Instantiate as XML Model (XMI)…",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.instantiateClass",
+        "title": "Instantiate Class as XML Model (XMI)…",
         "category": "Oxychloride"
       },
       {
@@ -291,6 +341,42 @@
         "category": "Oxychloride"
       },
       {
+        "command": "oxychloride.openDiagram",
+        "title": "Open Metamodel Diagram",
+        "category": "Oxychloride",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "oxychloride.openDiagramText",
+        "title": "Show Text to the Side",
+        "category": "Oxychloride",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "oxychloride.generateCode",
+        "title": "Generate Code…",
+        "category": "Oxychloride",
+        "icon": "$(code)"
+      },
+      {
+        "command": "oxychloride.openTransformation",
+        "title": "Open Transformation",
+        "category": "Oxychloride",
+        "icon": "$(play)"
+      },
+      {
+        "command": "oxychloride.exploreStateSpace",
+        "title": "Explore State Space",
+        "category": "Oxychloride",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "oxychloride.transformModel",
+        "title": "Transform with Henshin…",
+        "category": "Oxychloride",
+        "icon": "$(play)"
+      },
+      {
         "command": "oxychloride.refresh",
         "title": "Refresh",
         "category": "Oxychloride",
@@ -300,6 +386,18 @@
         "command": "oxychloride.restartServer",
         "title": "Restart Language Server",
         "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.openRuleDiagram",
+        "title": "Open Rule Diagram",
+        "category": "Oxychloride",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "oxychloride.createHenshinCounterpart",
+        "title": "Create Equivalent .henshin / Henshin Text",
+        "category": "Oxychloride",
+        "icon": "$(sync)"
       }
     ],
     "menus": {
@@ -387,9 +485,39 @@
           "command": "oxychloride.useAsContext",
           "when": "view == oxychloride.validation && viewItem == result",
           "group": "2_context@1"
+        },
+        {
+          "command": "oxychloride.transformModel",
+          "when": "view == oxychloride.models && viewItem == resource",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.transformModel",
+          "when": "view == oxychloride.models && viewItem == resource",
+          "group": "1_create@2"
+        },
+        {
+          "command": "oxychloride.generateCode",
+          "when": "view == oxychloride.metamodels && viewItem == package",
+          "group": "2_export@2"
         }
       ],
       "editor/title": [
+        {
+          "command": "oxychloride.openRuleDiagram",
+          "when": "(editorLangId == henshin || resourceExtname == .henshin) && activeCustomEditorId != oxychloride.ruleDiagram && activeCustomEditorId != oxychloride.henshinDiagram",
+          "group": "navigation@0"
+        },
+        {
+          "command": "oxychloride.openDiagram",
+          "when": "resourceExtname =~ /^\\.(ecore|oclinecore)$/ && activeCustomEditorId != oxychloride.metamodelDiagram",
+          "group": "navigation@0"
+        },
+        {
+          "command": "oxychloride.openDiagramText",
+          "when": "activeCustomEditorId == oxychloride.metamodelDiagram || activeCustomEditorId == oxychloride.ruleDiagram || activeCustomEditorId == oxychloride.henshinDiagram",
+          "group": "navigation@0"
+        },
         {
           "command": "oxychloride.generateEcore",
           "when": "editorLangId == oclinecore && resourceScheme == file",
@@ -404,6 +532,21 @@
           "command": "oxychloride.exportXmi",
           "when": "editorLangId == hutn",
           "group": "navigation"
+        },
+        {
+          "command": "oxychloride.openTransformation",
+          "when": "editorLangId == henshin || resourceExtname == .henshin || activeCustomEditorId == oxychloride.ruleDiagram || activeCustomEditorId == oxychloride.henshinDiagram",
+          "group": "navigation@1"
+        },
+        {
+          "command": "oxychloride.exploreStateSpace",
+          "when": "editorLangId == henshin || resourceExtname == .henshin || activeCustomEditorId == oxychloride.ruleDiagram || activeCustomEditorId == oxychloride.henshinDiagram",
+          "group": "navigation@2"
+        },
+        {
+          "command": "oxychloride.createHenshinCounterpart",
+          "when": "editorLangId == henshin || resourceExtname == .henshin",
+          "group": "1_export@3"
         }
       ],
       "editor/context": [
@@ -411,12 +554,32 @@
           "command": "oxychloride.evaluateSelection",
           "when": "editorHasSelection && editorLangId =~ /^(ocl|oclinecore)$/",
           "group": "navigation@9"
+        },
+        {
+          "command": "oxychloride.instantiateClass",
+          "when": "editorLangId == oclinecore",
+          "group": "1_modification@9"
+        },
+        {
+          "command": "oxychloride.generateCode",
+          "when": "editorLangId == oclinecore || resourceExtname == .ecore",
+          "group": "1_modification@10"
         }
       ],
       "explorer/context": [
         {
+          "command": "oxychloride.openDiagram",
+          "when": "resourceExtname == .ecore || resourceExtname == .oclinecore",
+          "group": "navigation@9"
+        },
+        {
           "command": "oxychloride.generateEcore",
           "when": "resourceExtname == .oclinecore",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.instantiateMetamodel",
+          "when": "resourceExtname == .oclinecore || resourceExtname == .ecore",
           "group": "7_modification"
         },
         {
@@ -427,6 +590,31 @@
         {
           "command": "oxychloride.loadMetamodel",
           "when": "resourceExtname == .ecore",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.openTransformation",
+          "when": "resourceExtname == .henshin_text || resourceExtname == .henshin",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.exploreStateSpace",
+          "when": "resourceExtname == .henshin_text || resourceExtname == .henshin",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.generateCode",
+          "when": "resourceExtname == .oclinecore || resourceExtname == .ecore",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.openRuleDiagram",
+          "when": "resourceExtname == .henshin_text || resourceExtname == .henshin",
+          "group": "navigation@9"
+        },
+        {
+          "command": "oxychloride.createHenshinCounterpart",
+          "when": "resourceExtname == .henshin_text || resourceExtname == .henshin",
           "group": "7_modification"
         }
       ],
@@ -470,6 +658,38 @@
         {
           "command": "oxychloride.generateEcore",
           "when": "editorLangId == oclinecore"
+        },
+        {
+          "command": "oxychloride.transformModel",
+          "when": "false"
+        },
+        {
+          "command": "oxychloride.instantiateMetamodel",
+          "when": "editorLangId == oclinecore || resourceExtname == .ecore"
+        },
+        {
+          "command": "oxychloride.instantiateClass",
+          "when": "editorLangId == oclinecore"
+        },
+        {
+          "command": "oxychloride.generateCode",
+          "when": "editorLangId == oclinecore || resourceExtname == .ecore"
+        },
+        {
+          "command": "oxychloride.openDiagram",
+          "when": "resourceExtname =~ /^\\.(ecore|oclinecore)$/"
+        },
+        {
+          "command": "oxychloride.openDiagramText",
+          "when": "activeCustomEditorId == oxychloride.metamodelDiagram || activeCustomEditorId == oxychloride.ruleDiagram || activeCustomEditorId == oxychloride.henshinDiagram"
+        },
+        {
+          "command": "oxychloride.openRuleDiagram",
+          "when": "editorLangId == henshin || resourceExtname == .henshin"
+        },
+        {
+          "command": "oxychloride.createHenshinCounterpart",
+          "when": "editorLangId == henshin || resourceExtname == .henshin"
         }
       ]
     },
@@ -480,12 +700,47 @@
         "mac": "cmd+shift+enter",
         "when": "editorTextFocus && editorHasSelection && editorLangId =~ /^(ocl|oclinecore)$/"
       }
+    ],
+    "customEditors": [
+      {
+        "viewType": "oxychloride.metamodelDiagram",
+        "displayName": "Metamodel Diagram",
+        "selector": [
+          {
+            "filenamePattern": "*.ecore"
+          },
+          {
+            "filenamePattern": "*.oclinecore"
+          }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "oxychloride.ruleDiagram",
+        "displayName": "Henshin Rule Diagram",
+        "selector": [
+          {
+            "filenamePattern": "*.henshin_text"
+          }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "oxychloride.henshinDiagram",
+        "displayName": "Henshin Rule Diagram",
+        "selector": [
+          {
+            "filenamePattern": "*.henshin"
+          }
+        ],
+        "priority": "default"
+      }
     ]
   },
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p webview",
     "test": "npm run build && tsc -p test && node test/out/run.js",
     "package": "node scripts/package.mjs"
   },
@@ -495,11 +750,17 @@
   "devDependencies": {
     "@types/mocha": "10.0.10",
     "@types/node": "22.18.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@types/vscode": "1.100.0",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.0.0",
+    "@xyflow/react": "12.12.0",
+    "elkjs": "0.12.0",
     "esbuild": "0.28.2",
     "mocha": "12.0.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "typescript": "5.9.3"
   }
 }

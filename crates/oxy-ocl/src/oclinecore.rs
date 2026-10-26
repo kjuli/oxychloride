@@ -655,6 +655,23 @@ pub fn print(mm: &Metamodel, resource: usize) -> String {
     out
 }
 
+/// How a type is written in a document's package `package`: OCL primitive types for the Ecore
+/// types that represent them, `ecore::EInt` for other Ecore types, simple names in the same
+/// package and qualified names elsewhere.
+pub fn type_name(mm: &Metamodel, t: ClassifierId, package: PackageId) -> String {
+    let c = mm.classifier(t);
+    if c.package == mm.ecore_package() {
+        if let Some((ocl, _)) = PRIMITIVES.iter().find(|(o, e)| *e == c.name && *o != "UnlimitedNatural") {
+            return ocl.to_string();
+        }
+        return format!("ecore::{}", name(&c.name));
+    }
+    if c.package == package {
+        return name(&c.name);
+    }
+    mm.qualified_name(t).split("::").map(name).collect::<Vec<_>>().join("::")
+}
+
 struct Printer<'a> {
     mm: &'a Metamodel,
     resource: usize,
@@ -666,7 +683,7 @@ const OCL_KEYWORDS: &[&str] = &[
 ];
 
 /// A name, quoted as `_'...'` unless it is a plain identifier.
-fn name(n: &str) -> String {
+pub fn name(n: &str) -> String {
     let mut chars = n.chars();
     let plain = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
         && chars.all(|c| c.is_alphanumeric() || c == '_')
@@ -675,7 +692,7 @@ fn name(n: &str) -> String {
 }
 
 /// A single-quoted string literal.
-fn string(s: &str) -> String {
+pub fn string(s: &str) -> String {
     let mut out = String::from("'");
     for c in s.chars() {
         match c {
@@ -697,7 +714,8 @@ fn indent(out: &mut String, depth: usize) {
     }
 }
 
-fn multiplicity(m: &Multiplicity) -> String {
+/// A multiplicity as written after a type: `[?]`, `[*]`, `[+]`, `[n]`, `[n..m]`, or nothing for `[1]`.
+pub fn multiplicity(m: &Multiplicity) -> String {
     let upper = |u: i32| if u < 0 { "*".to_string() } else { u.to_string() };
     match (m.lower, m.upper) {
         (1, 1) => String::new(),
@@ -789,18 +807,7 @@ impl Printer<'_> {
     }
 
     fn type_name(&self, t: ClassifierId, package: PackageId) -> String {
-        let mm = self.mm;
-        let c = mm.classifier(t);
-        if c.package == mm.ecore_package() {
-            if let Some((ocl, _)) = PRIMITIVES.iter().find(|(o, e)| *e == c.name && *o != "UnlimitedNatural") {
-                return ocl.to_string();
-            }
-            return format!("ecore::{}", name(&c.name));
-        }
-        if c.package == package {
-            return name(&c.name);
-        }
-        mm.qualified_name(t).split("::").map(name).collect::<Vec<_>>().join("::")
+        type_name(self.mm, t, package)
     }
 
     fn typed(&self, ty: Option<ClassifierId>, m: &Multiplicity, package: PackageId) -> String {

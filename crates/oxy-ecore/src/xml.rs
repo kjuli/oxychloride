@@ -23,6 +23,8 @@ pub struct Element {
     pub text: String,
     /// Byte offset of the start tag in the source.
     pub offset: usize,
+    /// Byte offset just after the element (after its end tag, or after an empty element's tag).
+    pub end: usize,
     /// Namespace prefixes in scope for this element (`""` is the default namespace).
     pub namespaces: Rc<HashMap<String, String>>,
 }
@@ -98,14 +100,16 @@ pub fn parse(text: &str, path: &str) -> Result<Element, LoadError> {
             }
             Event::Empty(start) => {
                 let parent_ns = stack.last().map(|e| e.namespaces.clone()).unwrap_or_else(|| root_ns.clone());
-                let el = start_element(&start, offset, parent_ns).map_err(|m| err(offset, m))?;
+                let mut el = start_element(&start, offset, parent_ns).map_err(|m| err(offset, m))?;
+                el.end = reader.buffer_position() as usize;
                 match stack.last_mut() {
                     Some(parent) => parent.children.push(el),
                     None => root = Some(el),
                 }
             }
             Event::End(_) => {
-                let el = stack.pop().ok_or_else(|| err(offset, "unexpected end tag".into()))?;
+                let mut el = stack.pop().ok_or_else(|| err(offset, "unexpected end tag".into()))?;
+                el.end = reader.buffer_position() as usize;
                 match stack.last_mut() {
                     Some(parent) => parent.children.push(el),
                     None => root = Some(el),
@@ -176,6 +180,7 @@ fn start_element(
         children: Vec::new(),
         text: String::new(),
         offset,
+        end: offset,
         namespaces: new_ns.map(Rc::new).unwrap_or(parent_ns),
     })
 }

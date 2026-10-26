@@ -1,6 +1,7 @@
 // The engine's JSON-RPC methods (crates/oxychloride/src/rpc.rs, docs/PROTOCOL.md), called
-// through the language server's `oxychloride/rpc` request. The types mirror app/src/api.ts:
-// field names are camelCase, lines and columns 0-based, columns count Unicode scalar values.
+// through the language server's `oxychloride/rpc` request. The types mirror
+// crates/oxychloride/src/protocol.rs: field names are camelCase, lines and columns 0-based,
+// columns count Unicode scalar values.
 
 import type { LanguageClient } from "vscode-languageclient/node";
 
@@ -171,6 +172,483 @@ export interface SchemaFile {
   text: string;
 }
 
+// ---------------------------------------------------------------- transformations (Henshin)
+
+export interface TransformationParameter {
+  name: string;
+  kind: "in" | "out" | "inout" | "var" | "unknown";
+  type: string;
+  /** The parameter is a node (its type is a class): its value is a node id. */
+  node: boolean;
+  literals?: string[];
+}
+
+export interface TransformationUnitInfo {
+  name: string;
+  kind: "rule" | "unit";
+  parameters: TransformationParameter[];
+  range: Range;
+  multiRules?: string[];
+}
+
+export interface TransformationUnits {
+  units: TransformationUnitInfo[];
+  diagnostics: Diagnostic[];
+}
+
+export interface GraphNode {
+  id: number;
+  class: string;
+  label: string;
+  attributes: { name: string; values: string[] }[];
+  container?: number;
+}
+
+export interface GraphEdge {
+  source: number;
+  target: number;
+  feature: string;
+  containment: boolean;
+  opposite?: string;
+}
+
+export interface GraphInfo {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface GraphChanges {
+  createdNodes: number[];
+  deletedNodes: GraphNode[];
+  createdEdges: GraphEdge[];
+  deletedEdges: GraphEdge[];
+  changedAttributes: { node: number; feature: string; old: string[]; new: string[] }[];
+}
+
+export interface NamedValue {
+  name: string;
+  value: string;
+}
+
+export interface RuleApplicationInfo {
+  rule: string;
+  label: string;
+  parameters: NamedValue[];
+  nodes: { name: string; node: number }[];
+  instances?: number;
+}
+
+export interface MatchInfo {
+  index: number;
+  label: string;
+  parameters: NamedValue[];
+  nodes: { name: string; node: number }[];
+  matched: number[];
+  instances?: number;
+}
+
+export interface MatchList {
+  matches: MatchInfo[];
+  more: boolean;
+  messages: string[];
+}
+
+export interface StateViolation {
+  constraint: string;
+  context: string;
+  node: number;
+  label: string;
+  status: ResultStatus;
+  message?: string;
+}
+
+export interface TransformationStep {
+  index: number;
+  label: string;
+  applications: RuleApplicationInfo[];
+}
+
+export interface TransformationState {
+  session: number;
+  model: string;
+  steps: TransformationStep[];
+  step: number;
+  graph: GraphInfo;
+  changes: GraphChanges;
+  violations: StateViolation[];
+}
+
+export interface TransformationResult {
+  applied: boolean;
+  state: TransformationState;
+  messages: string[];
+}
+
+export interface StateSpaceState {
+  id: number;
+  depth: number;
+  nodes: number;
+  explored: boolean;
+  terminal: boolean;
+  violations: number;
+}
+
+export interface StateSpaceTransition {
+  source: number;
+  target: number;
+  rule: string;
+  label: string;
+  count: number;
+}
+
+export interface StateSpaceInfo {
+  session: number;
+  step: number;
+  rules: string[];
+  states: StateSpaceState[];
+  transitions: StateSpaceTransition[];
+  complete: boolean;
+  messages: string[];
+}
+
+export interface StateSpaceStateDetails {
+  id: number;
+  graph: GraphInfo;
+  violations: StateViolation[];
+  path: number[];
+  changes: GraphChanges;
+}
+
+/** A language code can be generated for (see `codeTargets`). */
+export interface CodeTarget {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** What `generateCode` generates: the packages of a metamodel `resource` (an `.ecore` file's
+ * URI or an OCLinEcore document's name, as in `PackageInfo.resource`), or named `packages`. */
+export interface CodeRequest {
+  target: string;
+  resource?: string;
+  packages?: string[];
+  /** The name of the generated package or crate (default: the first package's name). */
+  name?: string;
+  /** Complete OCL documents to include (default: all open ones). */
+  documents?: string[];
+}
+
+export interface GeneratedCode {
+  target: string;
+  packages: string[];
+  /** Paths relative to the output folder, with `/`. */
+  files: { path: string; text: string }[];
+  /** OCL the generated code does not support (it fails at run time there). */
+  problems: { severity: Severity; message: string; origin?: string }[];
+}
+
+// ---------------------------------------------------------------- metamodel diagrams
+
+export type ClassifierKind = "class" | "dataType" | "enum";
+
+/** A metamodel document as a class diagram (see `metamodelDiagram`). Elements have ids made
+ * of their names: `pkg::Class`, `pkg::Class.feature`, `pkg::Class.operation()`, `pkg::Enum.LITERAL`. */
+export interface MetamodelDiagram {
+  syntax: "ecore" | "oclinecore";
+  packages: DiagramPackage[];
+  classifiers: DiagramClassifier[];
+  /** Classifiers of other metamodels that the document's classes extend or refer to. */
+  external: DiagramExternal[];
+  /** The types features can have, as the document's syntax writes them. */
+  types: DiagramType[];
+  problems: DiagramProblem[];
+}
+
+export interface DiagramPackage {
+  id: string;
+  name: string;
+  nsUri: string;
+  nsPrefix: string;
+  range: Range;
+}
+
+export interface DiagramClassifier {
+  id: string;
+  name: string;
+  package: string;
+  kind: ClassifierKind;
+  isAbstract: boolean;
+  isInterface: boolean;
+  instanceClass?: string;
+  superTypes: string[];
+  attributes: DiagramFeature[];
+  references: DiagramFeature[];
+  operations: DiagramOperation[];
+  literals: DiagramLiteral[];
+  invariants: { name: string; range: Range }[];
+  range: Range;
+}
+
+export interface DiagramFeature {
+  id: string;
+  name: string;
+  typeName: string;
+  type?: string;
+  lower: number;
+  /** -1: unbounded. */
+  upper: number;
+  containment: boolean;
+  opposite?: string;
+  ordered: boolean;
+  unique: boolean;
+  derived: boolean;
+  changeable: boolean;
+  transient: boolean;
+  volatile: boolean;
+  isId: boolean;
+  defaultValue?: string;
+  range: Range;
+}
+
+export interface DiagramParameter {
+  name: string;
+  typeName: string;
+  type?: string;
+  lower: number;
+  upper: number;
+}
+
+export interface DiagramOperation {
+  id: string;
+  name: string;
+  parameters: DiagramParameter[];
+  typeName?: string;
+  type?: string;
+  lower: number;
+  upper: number;
+  hasBody: boolean;
+  range: Range;
+}
+
+export interface DiagramLiteral {
+  id: string;
+  name: string;
+  value: number;
+  literal: string;
+  range: Range;
+}
+
+export interface DiagramExternal {
+  id: string;
+  name: string;
+  kind: ClassifierKind;
+  isAbstract: boolean;
+  isInterface: boolean;
+  resource: string;
+}
+
+export interface DiagramType {
+  id: string;
+  label: string;
+  kind: ClassifierKind;
+}
+
+export interface DiagramProblem {
+  severity: Severity;
+  message: string;
+  element?: string;
+  range: Range;
+}
+
+export interface ParameterSpec {
+  name: string;
+  /** The id of the type. */
+  type: string;
+  lower?: number;
+  upper?: number;
+}
+
+/** Properties an `update` changes (absent ones stay). */
+export interface ElementUpdate {
+  name?: string;
+  isAbstract?: boolean;
+  isInterface?: boolean;
+  /** The id of the type; `""` removes the result type of an operation. */
+  type?: string;
+  lower?: number;
+  upper?: number;
+  containment?: boolean;
+  ordered?: boolean;
+  unique?: boolean;
+  derived?: boolean;
+  changeable?: boolean;
+  transient?: boolean;
+  volatile?: boolean;
+  isId?: boolean;
+  parameters?: ParameterSpec[];
+}
+
+/** A change of a metamodel document (see `editMetamodel`); elements and types by id. */
+export type MetamodelEdit =
+  | { kind: "addClassifier"; package: string; classifier: "class" | "abstractClass" | "interface" | "enum" | "dataType"; name: string }
+  | { kind: "addAttribute"; owner: string; name: string; type: string; lower?: number; upper?: number }
+  | { kind: "addReference"; owner: string; name: string; type: string; lower?: number; upper?: number; containment?: boolean; opposite?: string }
+  | { kind: "addOperation"; owner: string; name: string; type?: string; lower?: number; upper?: number; parameters?: ParameterSpec[] }
+  | { kind: "addLiteral"; owner: string; name: string }
+  | { kind: "addSuperType"; owner: string; superType: string }
+  | { kind: "removeSuperType"; owner: string; superType: string }
+  | { kind: "update"; element: string; properties: ElementUpdate }
+  | { kind: "delete"; elements: string[] };
+
+export interface MetamodelEditResult {
+  edits: { range: Range; text: string }[];
+  /** The id of the added or renamed element. */
+  element?: string;
+}
+
+// ---------------------------------------------------------------- rule diagrams (Henshin)
+
+/** What a rule does with a node, edge or attribute (Henshin's actions). */
+export type RuleAction = "preserve" | "create" | "delete" | "forbid" | "require";
+
+export interface TransformationParameterSpec {
+  kind: "in" | "out" | "inout" | "var" | "unknown";
+  name: string;
+  /** As written; none for parameters without a type. */
+  type?: string;
+}
+
+/** The rules and units of a Henshin document (text or `.henshin` file), for drawing them in
+ * Henshin's notation (see `transformationDiagram`). Ids: rule `r`, multi-rule `r/m`, condition
+ * graph `r#g`, node `<scope>::n`, edge `<scope>::s->t:ref`, attribute `<scope>::n.a`, unit `u`,
+ * unit element `u@1`, `u@2.1`. */
+export interface TransformationDiagram {
+  syntax: "text" | "model";
+  imports: string[];
+  rules: RuleDiagram[];
+  units: UnitDiagram[];
+  classes: NodeClass[];
+  types: string[];
+  problems: DiagramProblem[];
+}
+
+export interface RuleDiagram {
+  id: string;
+  name: string;
+  parameters: TransformationParameterSpec[];
+  checkDangling: boolean;
+  injectiveMatching: boolean;
+  conditions: string[];
+  javaImports: string[];
+  multiRules: MultiRuleDiagram[];
+  formulas: FormulaDiagram[];
+  nodes: RuleNodeDiagram[];
+  edges: RuleEdgeDiagram[];
+  range: Range;
+}
+
+export interface MultiRuleDiagram {
+  id: string;
+  name: string;
+  kernel: string;
+  checkDangling: boolean;
+  injectiveMatching: boolean;
+  conditions: string[];
+  range: Range;
+}
+
+export interface FormulaDiagram {
+  scope: string;
+  formula: string;
+  graphs: string[];
+  range: Range;
+}
+
+export interface RuleNodeDiagram {
+  id: string;
+  name: string;
+  class: string;
+  classId?: string;
+  action: RuleAction;
+  multi?: string;
+  condition?: string;
+  attributes: RuleAttributeDiagram[];
+  parameter: boolean;
+  range: Range;
+}
+
+export interface RuleAttributeDiagram {
+  id: string;
+  name: string;
+  value: string;
+  action: RuleAction;
+  set: boolean;
+  scope?: string;
+  range: Range;
+}
+
+export interface RuleEdgeDiagram {
+  id: string;
+  source: string;
+  target: string;
+  reference: string;
+  action: RuleAction;
+  multi?: string;
+  condition?: string;
+  range: Range;
+}
+
+export interface UnitDiagram {
+  id: string;
+  name: string;
+  parameters: TransformationParameterSpec[];
+  body: UnitStepDiagram[];
+  /** The body in the textual syntax. */
+  text: string;
+  range: Range;
+}
+
+export interface UnitStepDiagram {
+  id: string;
+  kind: "call" | "sequence" | "independent" | "priority" | "if" | "for" | "while" | "strict" | "rollback";
+  target?: string;
+  arguments?: string[];
+  count?: string;
+  value?: boolean;
+  children?: UnitStepDiagram[][];
+  range: Range;
+}
+
+export interface NodeClass {
+  id: string;
+  name: string;
+  isAbstract: boolean;
+  conformsTo: string[];
+  attributes: { name: string; type: string; literals?: string[] }[];
+  references: { name: string; target: string; containment: boolean; many: boolean }[];
+}
+
+/** A change of a transformation document (see `editTransformation`); elements by id. */
+export type TransformationEdit =
+  | { kind: "addRule"; name: string }
+  | { kind: "addUnit"; name: string }
+  | { kind: "rename"; element: string; name: string }
+  | { kind: "delete"; elements: string[] }
+  | { kind: "setParameters"; element: string; parameters: TransformationParameterSpec[] }
+  | { kind: "setRuleOptions"; element: string; checkDangling?: boolean; injectiveMatching?: boolean }
+  | { kind: "setConditions"; element: string; conditions: string[] }
+  | { kind: "addNode"; scope: string; name: string; class: string; action: RuleAction }
+  | { kind: "updateNode"; element: string; class?: string; action?: RuleAction }
+  | { kind: "addEdge"; scope?: string; source: string; target: string; reference: string; action: RuleAction }
+  | { kind: "updateEdge"; element: string; action?: RuleAction; reference?: string }
+  | { kind: "addAttribute"; node: string; scope?: string; name: string; value: string; action?: RuleAction; set?: boolean }
+  | { kind: "updateAttribute"; element: string; name?: string; value?: string; action?: RuleAction; set?: boolean }
+  | { kind: "addMultiRule"; scope: string; name: string }
+  | { kind: "setUnitBody"; element: string; body: string };
+
+/** Parameter values by name: strings, numbers, Booleans, or node ids for node parameters. */
+export type ParameterValues = Record<string, string | number | boolean | null>;
+
 export class Engine {
   constructor(private readonly client: () => LanguageClient | undefined) {}
 
@@ -189,12 +667,58 @@ export class Engine {
   loadEcore = (path: string) => this.call<LoadResult>("loadEcore", { path });
   loadModel = (path: string) => this.call<LoadResult>("loadModel", { path });
   exportDocument = (name: string, target?: string) =>
-    this.call<{ text: string; format: "ecore" | "xmi" }>("exportDocument", { name, target });
+    this.call<{ text: string; format: "ecore" | "xmi" | "henshin" | "henshin_text" }>("exportDocument", { name, target });
   convertFile = (path: string, to: "oclinecore" | "hutn") => this.call<{ text: string }>("convertFile", { path, to });
   createObject = (name: string, cls: string, container?: { fragment: string; feature: string }, text?: string) =>
     this.call<DocumentEdit>("createObject", { name, class: cls, container, text });
   containmentOptions = (object: ObjectRef) => this.call<ContainmentOption[]>("containmentOptions", { object });
+  /** The qualified name of the class whose definition in an OCLinEcore document contains `position`. */
+  classAt = (name: string, position: Position) => this.call<string | null>("classAt", { name, position });
   schemas = () => this.call<SchemaFile[]>("schemas");
+  codeTargets = () => this.call<CodeTarget[]>("codeTargets");
+  generateCode = (request: CodeRequest) => this.call<GeneratedCode>("generateCode", request);
+
+  /** The diagram of a metamodel document (an OCLinEcore document or an `.ecore` file) with
+   * the text `text`. */
+  metamodelDiagram = (name: string, text: string) => this.call<MetamodelDiagram>("metamodelDiagram", { name, text });
+  /** The text edits that make a diagram edit in a metamodel document with the text `text`. */
+  editMetamodel = (name: string, text: string, edit: MetamodelEdit) =>
+    this.call<MetamodelEditResult>("editMetamodel", { name, text, edit });
+
+  /** The rule diagrams of a Henshin document (text or `.henshin` file) with the text `text`. */
+  transformationDiagram = (name: string, text: string) => this.call<TransformationDiagram>("transformationDiagram", { name, text });
+  /** The text edits that make a diagram edit in a Henshin document with the text `text`. */
+  editTransformation = (name: string, text: string, edit: TransformationEdit) =>
+    this.call<MetamodelEditResult>("editTransformation", { name, text, edit });
+  /** The edits that make `target` (the document of the other syntax, with `targetText`) mean
+   * what the document `name` (with `text`) means. Fails while `name` has errors. */
+  syncTransformation = (name: string, text: string, target: string, targetText: string) =>
+    this.call<{ edits: { range: Range; text: string }[] }>("syncTransformation", { name, text, target, targetText });
+
+  transformationUnits = (name: string) => this.call<TransformationUnits>("transformationUnits", { name });
+  startTransformation = (model: string) => this.call<TransformationState>("startTransformation", { model });
+  transformationState = (session: number, step?: number) =>
+    this.call<TransformationState>("transformationState", { session, step });
+  findMatches = (session: number, document: string, rule: string, parameters: ParameterValues, step?: number, limit?: number) =>
+    this.call<MatchList>("findMatches", { session, document, rule, parameters, step, limit });
+  applyTransformation = (
+    session: number,
+    document: string,
+    unit: string,
+    parameters: ParameterValues,
+    options: { match?: number; step?: number; seed?: number } = {},
+  ) => this.call<TransformationResult>("applyTransformation", { session, document, unit, parameters, ...options });
+  exportTransformation = (session: number, format: "hutn" | "xmi", step?: number, target?: string) =>
+    this.call<{ text: string }>("exportTransformation", { session, format, step, target });
+  exploreStateSpace = (
+    session: number,
+    document: string,
+    rules: string[],
+    options: { parameters?: Record<string, ParameterValues>; step?: number; maxStates?: number; maxDepth?: number; validate?: boolean } = {},
+  ) => this.call<StateSpaceInfo>("exploreStateSpace", { session, document, rules, ...options });
+  stateSpaceState = (session: number, state: number) => this.call<StateSpaceStateDetails>("stateSpaceState", { session, state });
+  adoptState = (session: number, state: number) => this.call<TransformationState>("adoptState", { session, state });
+  closeTransformation = (session: number) => this.call<{ closed: boolean }>("closeTransformation", { session });
 }
 
 export function errorMessage(e: unknown): string {

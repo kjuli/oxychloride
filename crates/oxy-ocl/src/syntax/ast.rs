@@ -429,6 +429,8 @@ pub struct PackageDef {
     pub packages: Vec<PackageDef>,
     pub classifiers: Vec<ClassifierDef>,
     pub span: Span,
+    /// The braces of the body (`None` for `package p : p = 'u';`).
+    pub body: Option<Span>,
 }
 
 /// `annotation 'source' ('key' = 'value', ...);` or `documentation 'text';`.
@@ -447,6 +449,14 @@ pub struct ClassifierDef {
     pub annotations: Vec<AnnotationDef>,
     pub kind: ClassifierDefKind,
     pub span: Span,
+    /// `class`, `interface`, `enum` or `datatype`.
+    pub keyword: Span,
+    /// From `extends` to the last supertype.
+    pub extends: Option<Span>,
+    /// The braces of a qualifier list such as `{ interface }`.
+    pub qualifiers: Option<Span>,
+    /// The braces of the body (`None` for `class A;`).
+    pub body: Option<Span>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -519,6 +529,10 @@ pub struct FeatureDef {
     pub constraints: Vec<Constraint>,
     pub annotations: Vec<AnnotationDef>,
     pub span: Span,
+    /// The braces of the qualifier list.
+    pub qualifier_span: Option<Span>,
+    /// The braces of the body with the constraints.
+    pub body: Option<Span>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -534,6 +548,8 @@ pub struct ParamDef {
 pub struct OperationDef {
     pub name: Ident,
     pub params: Vec<ParamDef>,
+    /// The parentheses around the parameters.
+    pub params_span: Span,
     /// `None` for operations without a result.
     pub ty: Option<TypeRef>,
     pub multiplicity: Option<MultiplicityDef>,
@@ -543,4 +559,8 @@ pub struct OperationDef {
     pub constraints: Vec<Constraint>,
     pub annotations: Vec<AnnotationDef>,
     pub span: Span,
+    /// The braces of the qualifier list.
+    pub qualifier_span: Option<Span>,
+    /// The braces of the body with the constraints.
+    pub body: Option<Span>,
 }

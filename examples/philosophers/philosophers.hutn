@@ -1,0 +1,17 @@
+// Three philosophers and three forks (philosophers.oclinecore).
+
+@Spec {
+  metamodel "philosophers" {
+    nsUri: "http://www.example.org/philosophers/1.0"
+  }
+}
+
+philosophers {
+  Table "table" {
+    forks: Fork "f1" { number: 1 }, Fork "f2" { number: 2 }, Fork "f3" { number: 3 }
+    philosophers:
+      Philosopher "plato" { name: "Plato" left: Fork "f1" right: Fork "f2" },
+      Philosopher "kant" { name: "Kant" left: Fork "f2" right: Fork "f3" },
+      Philosopher "hume" { name: "Hume" left: Fork "f3" right: Fork "f1" }
+  }
+}

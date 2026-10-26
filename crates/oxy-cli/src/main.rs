@@ -41,6 +41,10 @@ enum ConvertTo {
     Hutn,
     /// An XMI model (from a HUTN document).
     Xmi,
+    /// A Henshin model as Henshin's editors write it (`.henshin`, from a Henshin text).
+    Henshin,
+    /// A Henshin text (`.henshin_text`, from a `.henshin` file).
+    HenshinText,
 }
 
 #[derive(clap::Args)]
@@ -60,10 +64,11 @@ struct Inputs {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Parse and check documents: Complete OCL, OCLinEcore metamodels and HUTN models (for
-    /// models, the constraints their objects violate are reported too).
+    /// Parse and check documents: Complete OCL, OCLinEcore metamodels, HUTN models (for
+    /// models, the constraints their objects violate are reported too) and Henshin
+    /// transformations (as text or as `.henshin` files).
     Check {
-        /// Documents (`.ocl`, `.oclinecore`, `.hutn`).
+        /// Documents (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text`, `.henshin`).
         #[arg(required = true)]
         documents: Vec<PathBuf>,
         #[command(flatten)]
@@ -119,7 +124,8 @@ enum Command {
         metamodels: Vec<PathBuf>,
     },
     /// Convert between the XML and the textual formats: `.ecore` files and OCLinEcore
-    /// documents, XMI models and HUTN documents.
+    /// documents, XMI models and HUTN documents, Henshin's `.henshin` files and Henshin texts
+    /// (`.henshin_text`; pass the metamodels with `-e`).
     Convert {
         /// The file to convert.
         input: PathBuf,
@@ -133,6 +139,30 @@ enum Command {
         #[command(flatten)]
         inputs: Inputs,
     },
+    /// Generate code from metamodels: classes with consistent references, XMI loading and
+    /// saving, and their OCL (invariants, operation bodies, pre- and postconditions, derived
+    /// features, definitions) translated into native code.
+    Generate {
+        /// Metamodels to generate code for (`.ecore` files or OCLinEcore documents). The
+        /// packages they depend on are generated too.
+        #[arg(required = true)]
+        metamodels: Vec<PathBuf>,
+        /// The target language.
+        #[arg(short, long, value_parser = targets())]
+        target: String,
+        /// The directory to write the code into (created if needed).
+        #[arg(short, long, value_name = "DIR")]
+        out: PathBuf,
+        /// Complete OCL documents with further constraints and definitions.
+        #[arg(short, long = "document", value_name = "FILE")]
+        document: Vec<PathBuf>,
+        /// The name of the generated package or crate (default: the first package's name).
+        #[arg(long)]
+        name: Option<String>,
+        /// Map a URI prefix to a directory, e.g. `pathmap://PCM_MODELS/=path/to/models/`.
+        #[arg(long = "map", value_name = "PREFIX=DIR")]
+        map: Vec<String>,
+    },
     /// Serve the JSON-RPC protocol on stdin/stdout (one JSON message per line).
     Serve,
     /// Run the language server (LSP on stdin/stdout), e.g. for the VS Code extension.
@@ -141,6 +171,11 @@ enum Command {
         #[arg(long)]
         stdio: bool,
     },
+}
+
+/// The identifiers of the code generation targets.
+fn targets() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(oxychloride::codegen::TARGETS.iter().map(|t| t.id()))
 }
 
 /// Exit codes: 0 success, 1 problems found (errors, violations), 2 the command failed.
@@ -343,8 +378,12 @@ fn run(command: Command, format: Format, r: &Renderer) -> Result<bool, String> {
                 (Some("ecore"), _) => ConvertTo::Ecore,
                 (Some("hutn"), _) => ConvertTo::Hutn,
                 (Some("xmi"), _) => ConvertTo::Xmi,
+                (Some("henshin"), _) => ConvertTo::Henshin,
+                (Some("henshin_text"), _) => ConvertTo::HenshinText,
                 (_, Language::OclInEcore) => ConvertTo::Ecore,
                 (_, Language::Hutn) => ConvertTo::Xmi,
+                (_, Language::Henshin) => ConvertTo::Henshin,
+                (_, Language::HenshinModel) => ConvertTo::HenshinText,
                 _ if input_name.ends_with(".ecore") => ConvertTo::Oclinecore,
                 _ => ConvertTo::Hutn,
             });
@@ -353,8 +392,13 @@ fn run(command: Command, format: Format, r: &Renderer) -> Result<bool, String> {
                     ws.convert_file(&input_name, Language::OclInEcore).map_err(|e| e.to_string())?
                 }
                 ConvertTo::Hutn => ws.convert_file(&input_name, Language::Hutn).map_err(|e| e.to_string())?,
-                ConvertTo::Ecore | ConvertTo::Xmi => {
-                    let expected = if to == ConvertTo::Ecore { Language::OclInEcore } else { Language::Hutn };
+                ConvertTo::Ecore | ConvertTo::Xmi | ConvertTo::Henshin | ConvertTo::HenshinText => {
+                    let expected = match to {
+                        ConvertTo::Ecore => Language::OclInEcore,
+                        ConvertTo::Xmi => Language::Hutn,
+                        ConvertTo::Henshin => Language::Henshin,
+                        _ => Language::HenshinModel,
+                    };
                     if input_language != expected {
                         return Err(format!("{input_name} is not a .{} document", expected.extension()));
                     }
@@ -380,6 +424,73 @@ fn run(command: Command, format: Format, r: &Renderer) -> Result<bool, String> {
                 None => print!("{text}"),
             }
             Ok(true)
+        }
+        Command::Generate { metamodels, target, out, document, name, map } => {
+            let inputs = Inputs { ecore: Vec::new(), model: Vec::new(), map };
+            load(&mut ws, &inputs, &mut warnings)?;
+            // The resources whose packages to generate.
+            let mut resources = Vec::new();
+            let mut opened = Vec::new();
+            for m in &metamodels {
+                if Language::from_path(&m.to_string_lossy()) == Language::OclInEcore {
+                    let names = open_documents(&mut ws, std::slice::from_ref(m))?;
+                    resources.extend(names.iter().cloned());
+                    opened.extend(names);
+                } else {
+                    let r = ws.load_ecore_file(m).map_err(|e| e.to_string())?;
+                    warnings.extend(r.warnings);
+                    resources.push(r.uri);
+                }
+            }
+            let documents = open_documents(&mut ws, &document)?;
+            let mut diags = warnings;
+            for n in opened.iter().chain(&documents) {
+                diags.extend(ws.diagnostics(Some(n)));
+            }
+            let packages: Vec<String> =
+                ws.packages().into_iter().filter(|p| resources.contains(&p.resource)).map(|p| p.name).collect();
+            let request = oxychloride::CodeRequest {
+                target,
+                resource: None,
+                packages: Some(packages),
+                name,
+                documents: Some(documents),
+            };
+            let code = ws.generate_code(&request).map_err(|e| e.to_string())?;
+            for f in &code.files {
+                let path = out.join(&f.path);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+                }
+                std::fs::write(&path, &f.text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            }
+            if format == Format::Json {
+                let files: Vec<&str> = code.files.iter().map(|f| f.path.as_str()).collect();
+                print_json(&serde_json::json!({
+                    "target": code.target,
+                    "packages": code.packages,
+                    "files": files,
+                    "problems": code.problems,
+                    "diagnostics": diags,
+                }));
+            } else {
+                let sources = sources(&ws);
+                for d in &diags {
+                    eprint!("{}", r.diagnostic(d, sources.get(&d.source).map(String::as_str)));
+                }
+                for p in &code.problems {
+                    let origin = p.origin.as_deref().map(|o| format!("{o}: ")).unwrap_or_default();
+                    eprintln!("{}: {origin}{}", r.warning("warning"), p.message);
+                }
+                println!(
+                    "Generated {} files for {} into {} ({}).",
+                    code.files.len(),
+                    code.packages.join(", "),
+                    out.display(),
+                    code.target
+                );
+            }
+            Ok(code.problems.is_empty() && !has_errors(&diags))
         }
         Command::Lsp { .. } => {
             oxy_lsp::run_stdio().map_err(|e| e.to_string())?;

@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<henshin:Module xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ecore="http://www.eclipse.org/emf/2002/Ecore" xmlns:henshin="http://www.eclipse.org/emf/2011/Henshin" xmi:id="_2AGokAU8ZL9u5zqYOrdP3Q" name="philosophers">
+  <imports href="http://www.example.org/philosophers/1.0#/"/>
+  <units xsi:type="henshin:Rule" xmi:id="_PZb81Xx-NxLOiFQvh0HuLQ" name="takeLeft">
+    <lhs xmi:id="_VdquMZYeiO8A9Wp-kNWX2w" name="Lhs">
+      <nodes xmi:id="_akFHlRyXTFDcdLFhudOUAg" name="p" outgoing="_x2V4sZ5Ei0YLJprE54TnIw">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+      </nodes>
+      <nodes xmi:id="_UJ7BNSuZvjuMd2sag41e4g" name="fork" incoming="_x2V4sZ5Ei0YLJprE54TnIw">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <edges xmi:id="_x2V4sZ5Ei0YLJprE54TnIw" source="_akFHlRyXTFDcdLFhudOUAg" target="_UJ7BNSuZvjuMd2sag41e4g">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/left"/>
+      </edges>
+      <formula xsi:type="henshin:And" xmi:id="_60MRf-oq539nRLFyQe5fNg">
+        <left xsi:type="henshin:Not" xmi:id="_Isj7kwRT8F60ou_qDv2cIg">
+          <child xsi:type="henshin:NestedCondition" xmi:id="_u-ekZnz0Sh3hTiRWdZBcjQ">
+            <conclusion xmi:id="_x8U4LgEJpbRFaXPY7stGaQ" name="heldByOther">
+              <nodes xmi:id="_BoKRjmZ2FVLg9qp3FeWmSA" name="fork" incoming="_O8r8LoEnIa7NkGkIcArCeA">
+                <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+              </nodes>
+              <nodes xmi:id="_K2TngMhMPPrPg61dFlqaNg" name="other" outgoing="_O8r8LoEnIa7NkGkIcArCeA">
+                <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+              </nodes>
+              <edges xmi:id="_O8r8LoEnIa7NkGkIcArCeA" source="_K2TngMhMPPrPg61dFlqaNg" target="_BoKRjmZ2FVLg9qp3FeWmSA">
+                <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+              </edges>
+            </conclusion>
+            <mappings xmi:id="_tJrb3cmeznja_JzwgYsNOg" origin="_UJ7BNSuZvjuMd2sag41e4g" image="_BoKRjmZ2FVLg9qp3FeWmSA"/>
+          </child>
+        </left>
+        <right xsi:type="henshin:Not" xmi:id="_zii0LSJIxIhEfTqacsxARw">
+          <child xsi:type="henshin:NestedCondition" xmi:id="_8M767oJUHxYixoXpE4UkVw">
+            <conclusion xmi:id="_LPxgP5-AOlcTUBIfLYDKNw" name="heldByMe">
+              <nodes xmi:id="_Uiup9-oeRGhobCsiA-kVLg" name="p" outgoing="_vXl157ThWzkkoRe3GKf2sA">
+                <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+              </nodes>
+              <nodes xmi:id="_sFj4deFiuR-rfQ0SRTw1Ng" name="fork" incoming="_vXl157ThWzkkoRe3GKf2sA">
+                <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+              </nodes>
+              <edges xmi:id="_vXl157ThWzkkoRe3GKf2sA" source="_Uiup9-oeRGhobCsiA-kVLg" target="_sFj4deFiuR-rfQ0SRTw1Ng">
+                <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+              </edges>
+            </conclusion>
+            <mappings xmi:id="_8tU2wJ-JmLjp1OvbL4tiBA" origin="_akFHlRyXTFDcdLFhudOUAg" image="_Uiup9-oeRGhobCsiA-kVLg"/>
+            <mappings xmi:id="_XW1jepk48MXcoAyr9iNM-A" origin="_UJ7BNSuZvjuMd2sag41e4g" image="_sFj4deFiuR-rfQ0SRTw1Ng"/>
+          </child>
+        </right>
+      </formula>
+    </lhs>
+    <rhs xmi:id="_VdpKQ4geiO8A9Wp-Z9h0JQ" name="Rhs">
+      <nodes xmi:id="_t6R9fC_oP8Wdlq11jrw3UA" name="p" outgoing="_c2teybDq92322QAOBlcDrQ _QuwdD0EedE69Ax0i4HxMJg">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+      </nodes>
+      <nodes xmi:id="_xVuWXjpDp8dDmqDJTpXHvA" name="fork" incoming="_c2teybDq92322QAOBlcDrQ _QuwdD0EedE69Ax0i4HxMJg">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <edges xmi:id="_c2teybDq92322QAOBlcDrQ" source="_t6R9fC_oP8Wdlq11jrw3UA" target="_xVuWXjpDp8dDmqDJTpXHvA">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/left"/>
+      </edges>
+      <edges xmi:id="_QuwdD0EedE69Ax0i4HxMJg" source="_t6R9fC_oP8Wdlq11jrw3UA" target="_xVuWXjpDp8dDmqDJTpXHvA">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+      </edges>
+    </rhs>
+    <mappings xmi:id="_TzcgozE295gFNHEsQDxWCg" origin="_akFHlRyXTFDcdLFhudOUAg" image="_t6R9fC_oP8Wdlq11jrw3UA"/>
+    <mappings xmi:id="_HDzY0BNENx1XxwYJgrBvWg" origin="_UJ7BNSuZvjuMd2sag41e4g" image="_xVuWXjpDp8dDmqDJTpXHvA"/>
+  </units>
+  <units xsi:type="henshin:Rule" xmi:id="_K_tgIs9NxCQhv2RRuWLypg" name="takeRight" injectiveMatching="false">
+    <lhs xmi:id="_d5TlXfOSCxhl62jhDx6KpA" name="Lhs">
+      <nodes xmi:id="_rtoc7zTnDEMl5kXL9n-Pkw" name="p" outgoing="_n_Y0Usf3rUPJp6jAVhBaBw _2Pao5YznQuXz3v4Bjalz4Q _ZAtY4c_CMmkhTJilE_PmQA">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+      </nodes>
+      <nodes xmi:id="_GHcBkgWs19LhIGzfzls03A" name="left" incoming="_n_Y0Usf3rUPJp6jAVhBaBw _ZAtY4c_CMmkhTJilE_PmQA">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <nodes xmi:id="_izo_4sitkHsC5dxJ3iegcQ" name="right" incoming="_2Pao5YznQuXz3v4Bjalz4Q">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <edges xmi:id="_n_Y0Usf3rUPJp6jAVhBaBw" source="_rtoc7zTnDEMl5kXL9n-Pkw" target="_GHcBkgWs19LhIGzfzls03A">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/left"/>
+      </edges>
+      <edges xmi:id="_2Pao5YznQuXz3v4Bjalz4Q" source="_rtoc7zTnDEMl5kXL9n-Pkw" target="_izo_4sitkHsC5dxJ3iegcQ">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/right"/>
+      </edges>
+      <edges xmi:id="_ZAtY4c_CMmkhTJilE_PmQA" source="_rtoc7zTnDEMl5kXL9n-Pkw" target="_GHcBkgWs19LhIGzfzls03A">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+      </edges>
+      <formula xsi:type="henshin:Not" xmi:id="_iRhTiVlMFp_FmcxhVrQ-GQ">
+        <child xsi:type="henshin:NestedCondition" xmi:id="_oaAaZNms2BMuEuTeO8Zzkg">
+          <conclusion xmi:id="_TCfs3sx_XVi_FMivdZ_TTA" name="forbid">
+            <nodes xmi:id="_s6IKyjts9l0dMegSBw5A6Q" name="right" incoming="_2ABAM34maVJmbtQhkhthIw">
+              <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+            </nodes>
+            <nodes xmi:id="_Emi_NbITJJLsRSkAYtfXMw" name="holder" outgoing="_2ABAM34maVJmbtQhkhthIw">
+              <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+            </nodes>
+            <edges xmi:id="_2ABAM34maVJmbtQhkhthIw" source="_Emi_NbITJJLsRSkAYtfXMw" target="_s6IKyjts9l0dMegSBw5A6Q">
+              <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+            </edges>
+          </conclusion>
+          <mappings xmi:id="_PmTErKNDmyTv_7qDSsCFVw" origin="_izo_4sitkHsC5dxJ3iegcQ" image="_s6IKyjts9l0dMegSBw5A6Q"/>
+        </child>
+      </formula>
+    </lhs>
+    <rhs xmi:id="_d5Rc8u2SCxhl62jg1yKvhg" name="Rhs">
+      <nodes xmi:id="_h1t-kK_39ef0gajZ-Z5nEQ" name="p" outgoing="_YYK0EZ-OBTCZKeym8P5EHQ _QJja2CTATY3YhrPjCGTmRw _0K2CFnPAYsx2ljy3-Gdntg _-iKAx8zATY3YhqJxLhcDAw">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+      </nodes>
+      <nodes xmi:id="_WOf4OYPXuib8jR_sdtw-Ug" name="left" incoming="_YYK0EZ-OBTCZKeym8P5EHQ _0K2CFnPAYsx2ljy3-Gdntg">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <nodes xmi:id="_-eugZrlyDfjBpfNNwsfhdw" name="right" incoming="_QJja2CTATY3YhrPjCGTmRw _-iKAx8zATY3YhqJxLhcDAw">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <edges xmi:id="_YYK0EZ-OBTCZKeym8P5EHQ" source="_h1t-kK_39ef0gajZ-Z5nEQ" target="_WOf4OYPXuib8jR_sdtw-Ug">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/left"/>
+      </edges>
+      <edges xmi:id="_QJja2CTATY3YhrPjCGTmRw" source="_h1t-kK_39ef0gajZ-Z5nEQ" target="_-eugZrlyDfjBpfNNwsfhdw">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/right"/>
+      </edges>
+      <edges xmi:id="_0K2CFnPAYsx2ljy3-Gdntg" source="_h1t-kK_39ef0gajZ-Z5nEQ" target="_WOf4OYPXuib8jR_sdtw-Ug">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+      </edges>
+      <edges xmi:id="_-iKAx8zATY3YhqJxLhcDAw" source="_h1t-kK_39ef0gajZ-Z5nEQ" target="_-eugZrlyDfjBpfNNwsfhdw">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+      </edges>
+    </rhs>
+    <mappings xmi:id="__gYUH4HqxmzSHkz3y5w3tQ" origin="_rtoc7zTnDEMl5kXL9n-Pkw" image="_h1t-kK_39ef0gajZ-Z5nEQ"/>
+    <mappings xmi:id="_OHYp5QR7XVgn7iLa6sNMHg" origin="_GHcBkgWs19LhIGzfzls03A" image="_WOf4OYPXuib8jR_sdtw-Ug"/>
+    <mappings xmi:id="_DzCIrF7L23kiBNJWX5jI6w" origin="_izo_4sitkHsC5dxJ3iegcQ" image="_-eugZrlyDfjBpfNNwsfhdw"/>
+  </units>
+  <units xsi:type="henshin:Rule" xmi:id="_3w2B6wee4HrPb3H02SOTFA" name="release">
+    <lhs xmi:id="_SjCU2O1uBPCoJplktbvL0g" name="Lhs">
+      <nodes xmi:id="_ziJYBKs6inidYsNzDw0erQ" name="p" outgoing="_-m79sQxGnVRWr-JDbw-loQ _Keq7TYE2r3_AKAnmrEmE6w _OtGYudbjlsaqa11H2qlVag _nlk4v2E2r3_AKCaqqlXtHw">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+      </nodes>
+      <nodes xmi:id="_9UlN8HrIiukJuqhU7-vzVg" name="left" incoming="_-m79sQxGnVRWr-JDbw-loQ _OtGYudbjlsaqa11H2qlVag">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <nodes xmi:id="_nJnjgNfC7L74rT3nPMlO4w" name="right" incoming="_Keq7TYE2r3_AKAnmrEmE6w _nlk4v2E2r3_AKCaqqlXtHw">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <edges xmi:id="_-m79sQxGnVRWr-JDbw-loQ" source="_ziJYBKs6inidYsNzDw0erQ" target="_9UlN8HrIiukJuqhU7-vzVg">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/left"/>
+      </edges>
+      <edges xmi:id="_Keq7TYE2r3_AKAnmrEmE6w" source="_ziJYBKs6inidYsNzDw0erQ" target="_nJnjgNfC7L74rT3nPMlO4w">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/right"/>
+      </edges>
+      <edges xmi:id="_OtGYudbjlsaqa11H2qlVag" source="_ziJYBKs6inidYsNzDw0erQ" target="_9UlN8HrIiukJuqhU7-vzVg">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+      </edges>
+      <edges xmi:id="_nlk4v2E2r3_AKCaqqlXtHw" source="_ziJYBKs6inidYsNzDw0erQ" target="_nJnjgNfC7L74rT3nPMlO4w">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/holds"/>
+      </edges>
+    </lhs>
+    <rhs xmi:id="_SjBof_tuBPCoJplko8NQWA" name="Rhs">
+      <nodes xmi:id="_KJBYMn7ty2oJez9TCykTFw" name="p" outgoing="_CiKc6D_a-A31M31_pAn44w _2_142UBp8B3FZGgvCA0ofQ">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher"/>
+      </nodes>
+      <nodes xmi:id="_v0IeTDy3CLFTSjRUuHwjeA" name="left" incoming="_CiKc6D_a-A31M31_pAn44w">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <nodes xmi:id="_Tu6X9_43sjF8TozHlloq9Q" name="right" incoming="_2_142UBp8B3FZGgvCA0ofQ">
+        <type href="http://www.example.org/philosophers/1.0#//Fork"/>
+      </nodes>
+      <edges xmi:id="_CiKc6D_a-A31M31_pAn44w" source="_KJBYMn7ty2oJez9TCykTFw" target="_v0IeTDy3CLFTSjRUuHwjeA">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/left"/>
+      </edges>
+      <edges xmi:id="_2_142UBp8B3FZGgvCA0ofQ" source="_KJBYMn7ty2oJez9TCykTFw" target="_Tu6X9_43sjF8TozHlloq9Q">
+        <type href="http://www.example.org/philosophers/1.0#//Philosopher/right"/>
+      </edges>
+    </rhs>
+    <mappings xmi:id="_PuCPhIAW7QH3oLl1FEsd6w" origin="_ziJYBKs6inidYsNzDw0erQ" image="_KJBYMn7ty2oJez9TCykTFw"/>
+    <mappings xmi:id="_J-8nufETSJxwc6kPkywiFA" origin="_9UlN8HrIiukJuqhU7-vzVg" image="_v0IeTDy3CLFTSjRUuHwjeA"/>
+    <mappings xmi:id="_d_kmV1e6WH5eURcytxNTqQ" origin="_nJnjgNfC7L74rT3nPMlO4w" image="_Tu6X9_43sjF8TozHlloq9Q"/>
+  </units>
+</henshin:Module>

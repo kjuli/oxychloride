@@ -9,6 +9,7 @@ use oxy_ecore::{ClassifierId, ElementRef, FeatureId, Metamodel, OCL_ANNOTATION_S
 use crate::check::Checker;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oclinecore::OclInEcore;
+use crate::resolution::Analysis;
 use crate::span::{LineIndex, Position, Span};
 use crate::syntax::ast::*;
 use crate::syntax::{parse_document, parse_expression};
@@ -134,6 +135,7 @@ pub struct Environment {
     pub(crate) contracts: HashMap<OperationId, Vec<usize>>,
     pub(crate) diagnostics: Vec<SourcedDiagnostic>,
     pub(crate) expr_types: HashMap<SourceId, Vec<(Span, Type)>>,
+    pub(crate) analysis: HashMap<SourceId, Analysis>,
 }
 
 impl Environment {
@@ -178,6 +180,19 @@ impl Environment {
     /// Statically inferred types of all checked expressions in a source, with their spans.
     pub fn expr_types(&self, source: SourceId) -> &[(Span, Type)] {
         self.expr_types.get(&source).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The static types of the checked expressions of a source, and how their names and calls
+    /// were resolved (by expression id).
+    pub fn analysis(&self, source: SourceId) -> Option<&Analysis> {
+        self.analysis.get(&source)
+    }
+
+    /// Resolves a type written in OCL (e.g. a variable's declared type) like the checker
+    /// does; unqualified names are looked up in `package` first. Unknown types are
+    /// [`Type::Error`].
+    pub fn resolve_type(&self, mm: &Metamodel, package: Option<PackageId>, te: &TypeExpr) -> Type {
+        resolve_type(mm, package, te, &mut Vec::new())
     }
 
     /// The type of the innermost checked expression whose span contains `offset`.
@@ -769,6 +784,7 @@ impl<'a> EnvironmentBuilder<'a> {
         let checks = std::mem::take(&mut self.checks);
         let mut results = Vec::new();
         let mut types: HashMap<SourceId, Vec<(Span, Type)>> = HashMap::new();
+        let mut analysis: HashMap<SourceId, Analysis> = HashMap::new();
         {
             let env = &self.env;
             for (check, package) in &checks {
@@ -846,10 +862,12 @@ impl<'a> EnvironmentBuilder<'a> {
                     results.push(SourcedDiagnostic { source, diagnostic: d });
                 }
                 types.entry(source).or_default().extend(checker.take_types());
+                analysis.entry(source).or_default().extend(checker.take_analysis());
             }
         }
         self.env.diagnostics.extend(results);
         self.env.expr_types = types;
+        self.env.analysis = analysis;
         // Stable order: by source, then position, errors first at equal positions.
         self.env.diagnostics.sort_by(|a, b| {
             (a.source, a.diagnostic.span.start, a.diagnostic.severity).cmp(&(
@@ -894,7 +912,7 @@ fn ocl_annotations(annotations: &[oxy_ecore::Annotation]) -> impl Iterator<Item 
 }
 
 /// EMF "invariant operations": `op(diagnostics : EDiagnosticChain, context : EMap) : EBoolean`.
-pub(crate) fn is_invariant_operation(mm: &Metamodel, op: OperationId) -> bool {
+pub fn is_invariant_operation(mm: &Metamodel, op: OperationId) -> bool {
     let o = mm.operation(op);
     let type_name = |t: Option<ClassifierId>| t.map(|t| mm.classifier(t).name.as_str());
     o.params.len() == 2

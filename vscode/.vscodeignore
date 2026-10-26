@@ -8,3 +8,4 @@ tsconfig.json
 scripts/**
 .gitignore
 .vscode/**
+webview/**

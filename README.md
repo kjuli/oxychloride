@@ -4,10 +4,11 @@ An OCL (Object Constraint Language) engine for Ecore models, written in Rust: a 
 
 - **Library** — load `.ecore` metamodels and XMI models, parse and type check OCL, evaluate expressions, validate invariants and pre-/postconditions.
 - **Textual modelling** — write metamodels in **OCLinEcore** (Ecore classes with embedded OCL) and models in **HUTN** (the OMG Human-Usable Textual Notation, a generic syntax for instances of any metamodel); convert both to and from `.ecore`/XMI.
-- **CLI** (`oxy`) — check documents, run constraints against models, evaluate expressions, check the OCL embedded in metamodels, convert between XML and text formats.
+- **Graph transformations** — in-place model transformations with **Henshin**, written in its textual syntax (`.henshin_text`) or as the `.henshin` models of Henshin's graphical editors — equivalent, converted into each other and kept in sync in pairs: rules with application conditions, attribute conditions and multi-rules, units, step-by-step application and state space exploration, with every state checked against the OCL constraints. See [docs/HENSHIN.md](docs/HENSHIN.md).
+- **Code generation** — native **Python** packages and **Rust** crates from a metamodel, like EMF's generated Java: classes with consistent containment and opposites, XMI loading and saving, and the OCL (invariants, operation bodies, pre- and postconditions, derived features, definitions) translated into native code that does not need the engine. See [docs/CODEGEN.md](docs/CODEGEN.md).
+- **CLI** (`oxy`) — check documents, run constraints against models, evaluate expressions, check the OCL embedded in metamodels, convert between XML and text formats, generate code.
 - **Integration API** — a JSON-RPC protocol over stdio (`oxy serve`), the same protocol through a C ABI (`liboxychloride_ffi`), and a Rust API, so other modelling tools can validate their models with OCL.
-- **VS Code extension** — the same in VS Code, through a language server (`oxy lsp`): OCLinEcore metamodels, HUTN and XMI models checked live against all their OCL constraints, an OCL console, metamodel/model views that create instances, and XML Schemas so the XML extension validates XMI files.
-- **Desktop app** — a Tauri-based editor for Complete OCL, OCLinEcore and HUTN documents with highlighting, metamodel-aware completion, live constraint checking, a metamodel/model browser, validation results and an evaluation console.
+- **VS Code extension** — the same in VS Code, through a language server (`oxy lsp`): OCLinEcore metamodels, HUTN and XMI models checked live against all their OCL constraints, a graphical **metamodel diagram** for `.ecore` and `.oclinecore` files that edits the same document as the text editor beside it, an OCL console, metamodel/model views that create instances, XML Schemas so the XML extension validates XMI files, code generation from the context menu, and Henshin transformations with highlighting, completion, a graphical **rule diagram** in Henshin's notation and colors (for texts and `.henshin` files, which are kept equivalent), and a view that applies rules step by step and draws state spaces.
 
 ## Quick start
 
@@ -39,6 +40,10 @@ $B convert examples/university/university.hutn -e examples/university/university
 # And the other way: .ecore to OCLinEcore, XMI to HUTN.
 $B convert examples/library/library.ecore
 $B convert examples/library/library.xmi -e examples/library/library.ecore
+
+# Generate a Python package (or a Rust crate) with the OCL as native code.
+$B generate examples/library/library.ecore -d examples/library/library.ocl -t python -o generated
+$B generate examples/university/university.oclinecore -t rust -o generated
 ```
 
 Model files referenced by a model (e.g. a PCM allocation → system → repository) are loaded automatically; use `--map PREFIX=DIR` for `pathmap://` URIs, e.g. `--map pathmap://PCM_MODELS/=path/to/PCM_MODELS/`. `platform:/plugin/...` references between `.ecore` files resolve to a file of the same name next to the referencing file.
@@ -118,15 +123,46 @@ university {
 
 A package block (named by package name, nsPrefix or `@Spec` name) holds root objects `Class "identifier" { feature: value, ... }`. Containment features take nested objects; other references refer to objects by `Class "identifier"` (or just `"identifier"`). Values are strings, numbers, `true`/`false`, `null` and enumeration literals; multi-valued features take comma-separated lists. Boolean attributes can also be set as adjectives (`active Member "x" {}`, `~active` for `false`). Identifiers become `xmi:id`s. Errors (unknown classes or features, type mismatches, unresolved references, unset required features) are reported with exact ranges; once a model is free of errors, the constraints its objects violate are reported on the objects too.
 
+## Graph transformations (Henshin)
+
+**Henshin** documents describe in-place graph transformations of models, as in [Eclipse Henshin](https://www.eclipse.org/henshin/): in its textual syntax (`.henshin_text`, the `org.eclipse.emf.henshin.text` grammar), or as the models its graphical and tree editors write (`.henshin`). The two mean the same — a `.henshin` file is read into the syntax tree of the text and compiled by the same compiler, and written from the compiled rules — so either can be run, converted into the other, and edited as a rule diagram; a text and a `.henshin` file of the same name are kept equivalent (see [docs/HENSHIN.md](docs/HENSHIN.md)):
+
+```
+ePackageImport university
+
+rule enrol(IN student:Student, IN course:Course) {
+	graph {
+		node student:Student
+		node course:Course
+		create node enrolment:Enrolment
+		edges [(create student->enrolment:enrolments), (create enrolment->course:course)]
+		forbid node existing:Enrolment
+		edges [(forbid student->existing:enrolments), (forbid existing->course:course)]
+	}
+}
+
+unit enrolEverywhere(IN student:Student, VAR course:Course) {
+	while { enrol(student, course) }
+}
+```
+
+Nodes and edges are preserved, created or deleted; `forbid` and `require` elements are negative and positive application conditions, and a `matchingFormula` combines named condition graphs with `AND`, `OR`, `XOR` and `!`. Attributes are matched (`name=param`; an unbound parameter is bound by the match), created, or changed (`set capacity=seats + extra`); `conditions [...]` constrain parameters. Multi-rules apply to all matches extending the kernel match, in the same step. Units combine rules: sequences (`strict`, `rollback`), `independent`, `priority`, `if`/`then`/`else`, `for` and `while`. Matching is injective unless `injectiveMatching false`, and with `checkDangling` (the default) a node is only deleted together with all its links.
+
+Transformations run on a copy of a model in a session (see `startTransformation` and the other methods in [docs/PROTOCOL.md](docs/PROTOCOL.md)): rules are applied at a chosen match or units executed, step by step, each step reporting what it created, deleted and changed and which invariants the result violates; states export as HUTN or XMI. `exploreStateSpace` computes all states a set of rules reaches (merging isomorphic states), with the terminal ones and those violating invariants. `examples/philosophers` is the dining philosophers, whose state space has a deadlock that an OCL invariant points out.
+
+In Henshin's models, attribute expressions are JavaScript; the engine evaluates the expression language of the textual syntax (literals, parameters, arithmetic, comparisons, `AND`, `OR`, `!`) with enumeration literals as `Enum.LITERAL`, which `.henshin` files are translated from and to. Java calls and attributes, and JavaScript the textual syntax cannot express (kept as `javascript("…")`), are not evaluated.
+
+```sh
+$B convert examples/university/university.henshin_text -e examples/university/university.oclinecore -o university.henshin
+$B convert examples/university/university.henshin -e examples/university/university.oclinecore   # back to text
+$B check examples/university/university.henshin -e examples/university/university.oclinecore
+```
+
 **Pre- and postconditions** are checked in two ways: whenever an operation with an OCL body is called during evaluation (in invariants, bodies, derivations or the console), its preconditions are checked before and its postconditions after the call (with `result` bound; `@pre` values are the current values, since OCL evaluation has no side effects); and validation calls every operation that has postconditions on every applicable object, with every combination of arguments from finite domains (Booleans, enumeration literals, model objects), skipping calls whose preconditions do not hold. Operations with other parameter types are only checked where they are called; the validation report says so.
 
 ## VS Code extension
 
 See [vscode/README.md](vscode/README.md). In short: `cargo build -p oxy-cli`, then open `vscode/` in VS Code and press F5 (or `cd vscode && npm install && npm run package` for a `.vsix` with the language server inside).
-
-## Desktop app
-
-See [app/README.md](app/README.md). In short: `cd app && npm install && npm run tauri dev`.
 
 ## Repository layout
 
@@ -134,18 +170,20 @@ See [app/README.md](app/README.md). In short: `cd app && npm install && npm run 
 |---|---|
 | `crates/oxy-ecore` | Ecore metamodels (`.ecore` loading, embedded `Ecore.ecore`), dynamic instance models, XMI loading, HUTN, XML Schema generation |
 | `crates/oxy-ocl` | OCL lexer, parser (expressions and Complete OCL documents), type checker, evaluator, standard library, validation |
-| `crates/oxychloride` | `Workspace` API, JSON protocol types, JSON-RPC server, editor support (hover, completion) |
+| `crates/oxy-henshin` | Henshin's textual syntax and `.henshin` models (reading, writing, JavaScript expressions), rules and units resolved against metamodels, graph matching and transformation, state space exploration |
+| `crates/oxy-codegen` | Code generation: the code model of a metamodel with its OCL lowered, the Python and Rust targets and their runtimes |
+| `crates/oxychloride` | `Workspace` API, JSON protocol types, JSON-RPC server, editor support (hover, completion), metamodel and rule diagrams and their edits, transformation sessions, converting and syncing the two syntaxes of Henshin |
 | `crates/oxy-cli` | The `oxy` command line tool |
 | `crates/oxy-ffi` | C ABI (`cdylib`/`staticlib`) |
 | `crates/oxy-lsp` | Language server (`oxy lsp`) |
-| `vscode/` | VS Code extension (TypeScript; grammars, views, OCL console) |
-| `assets/file-icons` | Icons of the document kinds, shared by the app and the extension |
-| `app/` | Tauri desktop app (React + CodeMirror front end) |
+| `vscode/` | VS Code extension (TypeScript; grammars, views, OCL console, metamodel diagram, transformation view) |
+| `assets/file-icons` | Icons of the document kinds (the extension ships a copy) |
 | `examples/library` | Example metamodel with embedded OCL, model (XMI and HUTN), and Complete OCL document |
-| `examples/university` | Example metamodel in OCLinEcore (with pre- and postconditions) and model in HUTN |
-| `docs/` | [Protocol](docs/PROTOCOL.md) and [architecture](docs/ARCHITECTURE.md) notes |
+| `examples/university` | Example metamodel in OCLinEcore (with pre- and postconditions), model in HUTN, and Henshin transformations (as text and as the equivalent `.henshin` model) |
+| `examples/philosophers` | The dining philosophers: metamodel, model and Henshin rules (text and `.henshin`) for state space exploration |
+| `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [code generation](docs/CODEGEN.md) and [Henshin](docs/HENSHIN.md) notes |
 
-`cargo build` / `cargo test` cover everything except the desktop app (`cargo build -p oxy-app` builds it).
+`cargo build` / `cargo test` cover the engine, the CLI, the C ABI and the language server; the extension is built with npm (see [vscode/README.md](vscode/README.md)).
 
 ## OCL support
 

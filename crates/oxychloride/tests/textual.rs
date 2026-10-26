@@ -274,6 +274,35 @@ fn hovers() {
 }
 
 #[test]
+fn finds_the_class_at_a_position() {
+    let (ws, mm_path, model_path) = university();
+    let (_, metamodel) = example("university/university.oclinecore");
+    let class_at = |ws: &Workspace, marker: &str| ws.class_at(&mm_path, position_after(&metamodel, marker));
+    assert_eq!(class_at(&ws, "class Univ").as_deref(), Some("university::University"));
+    // In a feature, an operation body and a constraint of the class.
+    assert_eq!(class_at(&ws, "attribute semes").as_deref(), Some("university::Student"));
+    assert_eq!(class_at(&ws, "body: enrolments->size() <=").as_deref(), Some("university::Course"));
+    assert_eq!(class_at(&ws, "invariant NotOverbooked(").as_deref(), Some("university::Course"));
+    // Enumerations are not classes; nor is the package header or a comment before it.
+    assert_eq!(class_at(&ws, "literal SEMI"), None);
+    assert_eq!(class_at(&ws, "package univ"), None);
+    assert_eq!(class_at(&ws, "-- A course"), None);
+    // Only OCLinEcore documents define classes.
+    assert_eq!(ws.class_at(&model_path, Position { line: 0, column: 0 }), None);
+
+    // Through the protocol, with an updated text.
+    let mut server = rpc::Server::new();
+    server.call("openDocument", json!({ "name": mm_path, "text": metamodel })).unwrap();
+    let edited =
+        metamodel.replace("class Student {", "class Person {\n    attribute born : Integer;\n  }\n\n  class Student {");
+    let position = position_after(&edited, "attribute bo");
+    let class = server.call("classAt", json!({ "name": mm_path, "text": edited, "position": position })).unwrap();
+    assert_eq!(class, json!("university::Person"));
+    let outside = server.call("classAt", json!({ "name": mm_path, "position": { "line": 0, "column": 0 } })).unwrap();
+    assert_eq!(outside, json!(null));
+}
+
+#[test]
 fn exports_and_converts() {
     let (ws, mm_path, model_path) = university();
     let ecore = ws.export_document(&mm_path, None).unwrap();
@@ -516,4 +545,44 @@ fn generates_xml_schemas() {
     let university = schemas.iter().find(|s| s.file_name == "university.xsd").unwrap();
     assert_eq!(university.ns_uri.as_deref(), Some("http://www.example.org/university/1.0"));
     assert!(university.text.contains("name=\"Course\""));
+}
+
+#[test]
+fn generates_code_for_a_textual_metamodel() {
+    let (mut ws, mm_path, _) = university();
+    // A Complete OCL document adds a definition and an invariant.
+    ws.open_document("extra.ocl", "package university context Student def: initial : String = name.substring(1, 1) inv Named: name.size() > 0 endpackage");
+    let request = CodeRequest { target: "python".into(), resource: Some(mm_path.clone()), ..Default::default() };
+    let code = ws.generate_code(&request).unwrap();
+    assert_eq!(code.packages, ["university"]);
+    assert!(code.problems.is_empty(), "{:?}", code.problems);
+    let paths: Vec<&str> = code.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        ["university/_runtime.py", "university/_model.py", "university/university.py", "university/__init__.py"]
+    );
+    let model = &code.files[1].text;
+    for expected in ["class Student(_rt.EObject):", "def check_named(self) -> bool:", "def initial(self) -> str:"] {
+        assert!(model.contains(expected), "{expected} missing");
+    }
+    // Without the document's definitions.
+    let request = CodeRequest { documents: Some(Vec::new()), ..request };
+    let code = ws.generate_code(&request).unwrap();
+    assert!(!code.files[1].text.contains("check_named"));
+
+    // Through the protocol: the targets, a crate, and errors.
+    let mut server = rpc::Server::new();
+    let targets = server.call("codeTargets", json!(null)).unwrap();
+    let ids: Vec<&str> = targets.as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["python", "rust"]);
+    let (_, text) = example("university/university.oclinecore");
+    server.call("openDocument", json!({ "name": "u.oclinecore", "text": text })).unwrap();
+    let code =
+        server.call("generateCode", json!({ "target": "rust", "resource": "u.oclinecore", "name": "uni" })).unwrap();
+    let files: Vec<&str> = code["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert!(files.contains(&"uni/Cargo.toml") && files.contains(&"uni/src/university.rs"), "{files:?}");
+    let error = server.call("generateCode", json!({ "target": "cobol", "resource": "u.oclinecore" })).unwrap_err();
+    assert_eq!(error.code, rpc::codes::INVALID_PARAMS);
+    let error = server.call("generateCode", json!({ "target": "rust", "resource": "nope.ecore" })).unwrap_err();
+    assert_eq!(error.code, rpc::codes::NOT_FOUND);
 }

@@ -8,6 +8,8 @@ rust-version.workspace = true
 [dependencies]
 oxy-ecore.workspace = true
 oxy-ocl.workspace = true
+oxy-henshin.workspace = true
+oxy-codegen.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 indexmap.workspace = true

@@ -1,0 +1,123 @@
+// In-place transformations of university models (university.oclinecore) in Henshin's
+// textual syntax. Open university.hutn, then "Open Transformation" on this file to apply
+// rules and units step by step, or explore the states that enrol and drop reach.
+
+ePackageImport university
+
+// Enrols a student in a course they are not enrolled in yet (a negative application
+// condition: there must be no such enrolment).
+rule enrol(IN student:Student, IN course:Course) {
+	graph {
+		node student:Student
+		node course:Course
+		create node enrolment:Enrolment
+		edges [(create student->enrolment:enrolments), (create enrolment->course:course)]
+		forbid node existing:Enrolment
+		edges [(forbid student->existing:enrolments), (forbid existing->course:course)]
+	}
+}
+
+// Drops an enrolment.
+rule drop(IN student:Student, IN course:Course) {
+	graph {
+		node student:Student
+		node course:Course
+		delete node enrolment:Enrolment
+		edges [(delete student->enrolment:enrolments), (delete enrolment->course:course)]
+	}
+}
+
+// Grades the enrolment of a student in a course.
+rule grade(IN student:Student, IN course:Course, IN mark:EInt) {
+	conditions [mark >= 1, mark <= 5]
+	graph {
+		node student:Student
+		node course:Course
+		node enrolment:Enrolment {
+			set grade=mark
+		}
+		edges [(student->enrolment:enrolments), (enrolment->course:course)]
+	}
+}
+
+// Adds a seminar to the university, unless there is a course with its code already.
+rule createSeminar(IN code:EString, IN title:EString, IN credits:EInt, IN capacity:EInt, OUT course:Course) {
+	conditions [credits > 0, capacity > 0]
+	graph {
+		node university:University
+		create node course:Course {
+			code=code
+			title=title
+			kind=Kind.SEMINAR
+			credits=credits
+			capacity=capacity
+		}
+		edges [(create university->course:courses)]
+		forbid node other:Course {
+			code=code
+		}
+		edges [(forbid university->other:courses)]
+	}
+}
+
+// Adds seats to a course: the current capacity is matched (bound to `seats`) and replaced.
+rule addSeats(IN code:EString, IN extra:EInt, VAR seats:EInt) {
+	conditions [extra > 0]
+	graph {
+		node course:Course {
+			code=code
+			capacity=seats
+			set capacity=seats + extra
+		}
+	}
+}
+
+// Closes a course that no other course requires: the course and, by the multi-rule, all
+// enrolments in it are deleted in one step (amalgamation). The course's own links to its
+// prerequisites are not part of the rule, so the dangling check is off.
+rule closeCourse(IN code:EString) {
+	checkDangling false
+	graph {
+		node university:University
+		delete node course:Course {
+			code=code
+		}
+		edges [(delete university->course:courses)]
+		forbid node dependent:Course
+		edges [(forbid dependent->course:prerequisites)]
+		multiRule dropEnrolments {
+			graph {
+				node student:Student
+				delete node enrolment:Enrolment
+				edges [(delete student->enrolment:enrolments), (delete enrolment->course:course)]
+			}
+		}
+	}
+}
+
+// Enrols a student in every course they are not enrolled in yet (a loop unit).
+unit enrolEverywhere(IN student:Student, VAR course:Course) {
+	while {
+		enrol(student, course)
+	}
+}
+
+// Grades the student's enrolment in the course; enrols them if there is none (a priority
+// unit: the first applicable step).
+unit gradeOrEnrol(IN student:Student, IN course:Course, IN mark:EInt) {
+	priority [grade(student, course, mark), enrol(student, course)]
+}
+
+// Replaces a course by a seminar. A sequence: if a step fails, the steps before it are
+// undone.
+unit replaceBySeminar(IN old:EString, IN code:EString, IN title:EString, IN credits:EInt, IN capacity:EInt, OUT course:Course) {
+	closeCourse(old)
+	createSeminar(code, title, credits, capacity, course)
+}
+
+// Adds `extra` seats three times (an iterated unit).
+unit growCourse(IN code:EString, IN extra:EInt, VAR seats:EInt) {
+	for (3) {
+		addSeats(code, extra, seats)
+	}
+}

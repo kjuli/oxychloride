@@ -3,16 +3,8 @@ resolver = "3"
 members = [
     "crates/oxy-ecore",
     "crates/oxy-ocl",
-    "crates/oxychloride",
-    "crates/oxy-cli",
-    "crates/oxy-ffi",
-    "crates/oxy-lsp",
-    "app/src-tauri",
-]
-# The desktop app pulls in a large dependency tree; keep plain `cargo build`/`cargo test` fast.
-default-members = [
-    "crates/oxy-ecore",
-    "crates/oxy-ocl",
+    "crates/oxy-henshin",
+    "crates/oxy-codegen",
     "crates/oxychloride",
     "crates/oxy-cli",
     "crates/oxy-ffi",
@@ -28,6 +20,8 @@ rust-version = "1.85"
 [workspace.dependencies]
 oxy-ecore = { path = "crates/oxy-ecore" }
 oxy-ocl = { path = "crates/oxy-ocl" }
+oxy-henshin = { path = "crates/oxy-henshin" }
+oxy-codegen = { path = "crates/oxy-codegen" }
 oxychloride = { path = "crates/oxychloride" }
 oxy-lsp = { path = "crates/oxy-lsp" }
 quick-xml = "0.42"

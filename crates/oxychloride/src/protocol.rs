@@ -1,4 +1,4 @@
-//! Serializable data exchanged with clients (JSON-RPC, C ABI, the desktop app).
+//! Serializable data exchanged with clients (JSON-RPC, C ABI, the language server).
 //!
 //! Field names are camelCase on the wire. Lines and columns are 0-based; columns count
 //! Unicode scalar values.
@@ -38,6 +38,14 @@ pub enum Language {
     Hutn,
     /// XMI: an instance model as EMF writes it (`.xmi`), edited as text.
     Xmi,
+    /// Henshin: graph transformation rules and units in Henshin's textual syntax
+    /// (`.henshin_text`).
+    Henshin,
+    /// A Henshin transformation module as Henshin's graphical and tree editors write it
+    /// (`.henshin`, XMI of Henshin's metamodel), edited as text or as rule diagrams. It means
+    /// the same as its textual syntax.
+    #[serde(rename = "henshinModel")]
+    HenshinModel,
 }
 
 impl Language {
@@ -47,6 +55,11 @@ impl Language {
         matches!(self, Language::Hutn | Language::Xmi)
     }
 
+    /// Whether documents of this language are Henshin transformations (in either syntax).
+    pub fn is_transformation(self) -> bool {
+        matches!(self, Language::Henshin | Language::HenshinModel)
+    }
+
     /// The language of a document, by its file extension (Complete OCL by default).
     pub fn from_path(name: &str) -> Language {
         let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
@@ -54,6 +67,8 @@ impl Language {
             "oclinecore" => Language::OclInEcore,
             "hutn" => Language::Hutn,
             "xmi" => Language::Xmi,
+            "henshin_text" => Language::Henshin,
+            "henshin" => Language::HenshinModel,
             _ => Language::Ocl,
         }
     }
@@ -64,6 +79,8 @@ impl Language {
             Language::OclInEcore => "oclinecore",
             Language::Hutn => "hutn",
             Language::Xmi => "xmi",
+            Language::Henshin => "henshin_text",
+            Language::HenshinModel => "henshin",
         }
     }
 }
@@ -474,4 +491,1016 @@ pub struct ExportResult {
     pub text: String,
     /// `ecore` (for OCLinEcore documents) or `xmi` (for HUTN documents).
     pub format: String,
+}
+
+// ------------------------------------------------------------------ transformations
+
+/// A rule or unit of a Henshin document.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationUnitInfo {
+    pub name: String,
+    /// `rule` or `unit`.
+    pub kind: String,
+    pub parameters: Vec<TransformationParameterInfo>,
+    /// The range of the rule's or unit's name.
+    pub range: Range,
+    /// Multi-rules of a rule.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub multi_rules: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationParameterInfo {
+    pub name: String,
+    /// `in`, `out`, `inout`, `var`, or `unknown` (no kind given).
+    pub kind: String,
+    #[serde(rename = "type")]
+    pub ty: String,
+    /// Whether the parameter is a node (its type is a class).
+    pub node: bool,
+    /// For enumeration-typed parameters: the literals.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub literals: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationUnits {
+    pub units: Vec<TransformationUnitInfo>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// An object of a transformed model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNodeInfo {
+    /// Stable within a transformation: created objects get new ids, ids are never reused.
+    pub id: u32,
+    /// Qualified class name.
+    pub class: String,
+    pub label: String,
+    /// Attribute values rendered in OCL syntax.
+    pub attributes: Vec<SlotInfo>,
+    /// The containing object.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub container: Option<u32>,
+}
+
+/// A link between objects. Of a bidirectional pair of references, only one side is listed
+/// (the containment, else the reference declared first); containers are implied.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdgeInfo {
+    pub source: u32,
+    pub target: u32,
+    pub feature: String,
+    pub containment: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub opposite: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphInfo {
+    pub nodes: Vec<GraphNodeInfo>,
+    pub edges: Vec<GraphEdgeInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttributeChange {
+    pub node: u32,
+    pub feature: String,
+    pub old: Vec<String>,
+    pub new: Vec<String>,
+}
+
+/// What a step changed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphChanges {
+    pub created_nodes: Vec<u32>,
+    /// The deleted objects, as they were.
+    pub deleted_nodes: Vec<GraphNodeInfo>,
+    pub created_edges: Vec<GraphEdgeInfo>,
+    pub deleted_edges: Vec<GraphEdgeInfo>,
+    pub changed_attributes: Vec<AttributeChange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedValue {
+    pub name: String,
+    pub value: String,
+}
+
+/// A rule node and the object it matched.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchedNode {
+    pub name: String,
+    pub node: u32,
+}
+
+/// An application of a rule.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleApplicationInfo {
+    pub rule: String,
+    /// `rule(param=value, ...)`, or for rules without parameters `rule(node: object, ...)`.
+    pub label: String,
+    pub parameters: Vec<NamedValue>,
+    /// Rule nodes and the objects they matched (nodes of multi-rules as `multiRule.node`).
+    pub nodes: Vec<MatchedNode>,
+    /// The number of multi-rule matches applied with it.
+    #[serde(skip_serializing_if = "is_zero", default)]
+    pub instances: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// A match of a rule (see `findMatches`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchInfo {
+    /// Pass it as `match` to `applyTransformation`.
+    pub index: usize,
+    pub label: String,
+    pub parameters: Vec<NamedValue>,
+    pub nodes: Vec<MatchedNode>,
+    /// All objects matched, including those of multi-rule matches.
+    pub matched: Vec<u32>,
+    #[serde(skip_serializing_if = "is_zero", default)]
+    pub instances: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchList {
+    pub matches: Vec<MatchInfo>,
+    /// Whether there are more matches than were listed.
+    pub more: bool,
+    /// Problems met while matching (e.g. a parameter without a value).
+    pub messages: Vec<String>,
+}
+
+/// An invariant that a state of a transformation violates (or cannot evaluate).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateViolation {
+    pub constraint: String,
+    /// Qualified name of the context class.
+    pub context: String,
+    pub node: u32,
+    pub label: String,
+    pub status: ResultStatus,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub message: Option<String>,
+}
+
+/// A step of a transformation: the initial model, or the application of a rule or unit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationStep {
+    pub index: usize,
+    /// `initial model`, or what was applied.
+    pub label: String,
+    /// The rule applications of the step (several for a unit).
+    pub applications: Vec<RuleApplicationInfo>,
+}
+
+/// A transformation session and one of its states.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationState {
+    pub session: u64,
+    /// The model resource the transformation started from.
+    pub model: String,
+    pub steps: Vec<TransformationStep>,
+    /// The step whose state `graph` is.
+    pub step: usize,
+    pub graph: GraphInfo,
+    /// What the step changed (relative to the step before).
+    pub changes: GraphChanges,
+    /// The invariants the state violates.
+    pub violations: Vec<StateViolation>,
+}
+
+/// The outcome of `applyTransformation`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationResult {
+    /// Whether the rule or unit could be applied (if not, no step was added).
+    pub applied: bool,
+    pub state: TransformationState,
+    pub messages: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateSpaceState {
+    pub id: usize,
+    /// The length of the shortest path from the initial state.
+    pub depth: usize,
+    pub nodes: usize,
+    /// Whether all transitions leaving the state are known (a limit may have stopped the
+    /// exploration).
+    pub explored: bool,
+    /// No rule is applicable (and the state was explored).
+    pub terminal: bool,
+    /// The number of invariant violations (when validating).
+    pub violations: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateSpaceTransition {
+    pub source: usize,
+    pub target: usize,
+    pub rule: String,
+    pub label: String,
+    /// The number of matches with this label between the two states.
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateSpaceInfo {
+    pub session: u64,
+    /// The step the exploration started from.
+    pub step: usize,
+    pub rules: Vec<String>,
+    /// `states[0]` is the initial state.
+    pub states: Vec<StateSpaceState>,
+    pub transitions: Vec<StateSpaceTransition>,
+    /// Whether every reachable state was explored.
+    pub complete: bool,
+    pub messages: Vec<String>,
+}
+
+/// A state of an explored state space.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateSpaceStateDetails {
+    pub id: usize,
+    pub graph: GraphInfo,
+    pub violations: Vec<StateViolation>,
+    /// The transitions (indices) of a shortest path from the initial state.
+    pub path: Vec<usize>,
+    /// What the last transition of the path changed.
+    pub changes: GraphChanges,
+}
+
+// ------------------------------------------------------------------ code generation
+
+/// A target language of `generateCode` (see `codeTargets`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeTarget {
+    /// The identifier to pass as `target` (`"python"`, `"rust"`).
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// What to generate code for (see `generateCode`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CodeRequest {
+    /// The target's identifier.
+    pub target: String,
+    /// The metamodel resource whose packages to generate: an `.ecore` file's URI or an
+    /// OCLinEcore document's name, as `PackageInfo::resource` reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// Qualified names of the packages to generate (instead of `resource`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packages: Option<Vec<String>>,
+    /// The name of the generated module, package or crate (default: the first package's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The Complete OCL documents whose constraints and definitions to include (default:
+    /// all open ones). The OCL embedded in the metamodels is always included.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documents: Option<Vec<String>>,
+}
+
+/// A file of generated code.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeFile {
+    /// Relative to the output directory, with `/` separators.
+    pub path: String,
+    pub text: String,
+}
+
+/// Something the generated code does not support (the affected OCL fails at run time).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeProblem {
+    pub severity: Severity,
+    pub message: String,
+    /// Where the OCL comes from, e.g. `library.ocl:16`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub origin: Option<String>,
+}
+
+/// The result of `generateCode`. The files are returned, not written.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedCode {
+    pub target: String,
+    /// Qualified names of the generated packages (the selected ones and those they depend
+    /// on).
+    pub packages: Vec<String>,
+    pub files: Vec<CodeFile>,
+    pub problems: Vec<CodeProblem>,
+}
+
+// ------------------------------------------------------------------ metamodel diagrams
+
+/// The syntax of a metamodel document shown as a diagram.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MetamodelSyntax {
+    /// An `.ecore` file (EMF's XMI).
+    Ecore,
+    /// An OCLinEcore document.
+    #[serde(rename = "oclinecore")]
+    OclInEcore,
+}
+
+/// The elements of a metamodel document, for drawing it as a class diagram (see
+/// `metamodelDiagram`). Elements are identified by ids derived from their names:
+/// `pkg::sub` (packages), `pkg::Class` (classifiers), `pkg::Class.feature`,
+/// `pkg::Class.operation()` and `pkg::Enum.LITERAL`; a repeated name gets `#2`, `#3`, ….
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetamodelDiagram {
+    pub syntax: MetamodelSyntax,
+    /// All packages of the document, subpackages included (in document order).
+    pub packages: Vec<DiagramPackage>,
+    pub classifiers: Vec<DiagramClassifier>,
+    /// Classifiers of other metamodels that classifiers of the document extend or refer to.
+    pub external: Vec<DiagramExternal>,
+    /// The types features, operations and parameters can have, as they are written.
+    pub types: Vec<DiagramType>,
+    pub problems: Vec<DiagramProblem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramPackage {
+    pub id: String,
+    pub name: String,
+    pub ns_uri: String,
+    pub ns_prefix: String,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramClassifier {
+    pub id: String,
+    pub name: String,
+    /// The id of the package.
+    pub package: String,
+    pub kind: ClassifierKind,
+    pub is_abstract: bool,
+    pub is_interface: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub instance_class: Option<String>,
+    /// Ids of the direct supertypes (classifiers of the document or `external` ones).
+    pub super_types: Vec<String>,
+    pub attributes: Vec<DiagramFeature>,
+    pub references: Vec<DiagramFeature>,
+    pub operations: Vec<DiagramOperation>,
+    pub literals: Vec<DiagramLiteral>,
+    pub invariants: Vec<DiagramInvariant>,
+    /// The definition in the document.
+    pub range: Range,
+}
+
+/// An attribute or reference.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramFeature {
+    pub id: String,
+    pub name: String,
+    /// The type as written in the document's syntax (`String`, `ecore::EInt`, `EString`).
+    pub type_name: String,
+    /// The id of the type, if it is resolved.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none", default)]
+    pub ty: Option<String>,
+    pub lower: i32,
+    /// `-1` for unbounded.
+    pub upper: i32,
+    pub containment: bool,
+    /// The id of the opposite reference.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub opposite: Option<String>,
+    pub ordered: bool,
+    pub unique: bool,
+    pub derived: bool,
+    pub changeable: bool,
+    pub transient: bool,
+    pub volatile: bool,
+    /// An `iD` attribute.
+    pub is_id: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_value: Option<String>,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramOperation {
+    pub id: String,
+    pub name: String,
+    pub parameters: Vec<DiagramParameter>,
+    /// The result type as written (`None` for operations without a result).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub type_name: Option<String>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none", default)]
+    pub ty: Option<String>,
+    pub lower: i32,
+    pub upper: i32,
+    /// The operation has an OCL body.
+    pub has_body: bool,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramParameter {
+    pub name: String,
+    pub type_name: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none", default)]
+    pub ty: Option<String>,
+    pub lower: i32,
+    pub upper: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramLiteral {
+    pub id: String,
+    pub name: String,
+    pub value: i64,
+    pub literal: String,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramInvariant {
+    pub name: String,
+    pub range: Range,
+}
+
+/// A classifier of another metamodel (e.g. `ecore::EObject` as a supertype).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramExternal {
+    pub id: String,
+    pub name: String,
+    pub kind: ClassifierKind,
+    pub is_abstract: bool,
+    pub is_interface: bool,
+    /// The URI of the metamodel resource it belongs to.
+    pub resource: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramType {
+    pub id: String,
+    /// The type as written in the document's syntax.
+    pub label: String,
+    pub kind: ClassifierKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramProblem {
+    pub severity: Severity,
+    pub message: String,
+    /// The innermost element whose definition contains the problem.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub element: Option<String>,
+    pub range: Range,
+}
+
+/// What a new classifier is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NewClassifier {
+    Class,
+    AbstractClass,
+    Interface,
+    Enum,
+    DataType,
+}
+
+/// A parameter of an operation added or changed by an edit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterSpec {
+    pub name: String,
+    /// The id of the type.
+    #[serde(rename = "type")]
+    pub ty: String,
+    #[serde(default = "one")]
+    pub lower: i32,
+    #[serde(default = "one")]
+    pub upper: i32,
+}
+
+fn one() -> i32 {
+    1
+}
+
+/// Properties an `update` edit changes; absent properties stay as they are.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementUpdate {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub is_abstract: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub is_interface: Option<bool>,
+    /// The id of the type (of a feature, or the result of an operation).
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none", default)]
+    pub ty: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lower: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub upper: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub containment: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ordered: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub unique: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub derived: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub changeable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub transient: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub volatile: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub is_id: Option<bool>,
+    /// The parameters of an operation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parameters: Option<Vec<ParameterSpec>>,
+}
+
+/// A change of a metamodel document, made by editing its text (see `editMetamodel`).
+/// Elements and types are named by their diagram ids.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum MetamodelEdit {
+    AddClassifier {
+        package: String,
+        classifier: NewClassifier,
+        name: String,
+    },
+    AddAttribute {
+        owner: String,
+        name: String,
+        #[serde(rename = "type")]
+        ty: String,
+        #[serde(default)]
+        lower: i32,
+        #[serde(default = "one")]
+        upper: i32,
+    },
+    /// A reference, and with `opposite` its opposite in the target class.
+    AddReference {
+        owner: String,
+        name: String,
+        #[serde(rename = "type")]
+        ty: String,
+        #[serde(default)]
+        lower: i32,
+        #[serde(default = "one")]
+        upper: i32,
+        #[serde(default)]
+        containment: bool,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        opposite: Option<String>,
+    },
+    AddOperation {
+        owner: String,
+        name: String,
+        #[serde(rename = "type", skip_serializing_if = "Option::is_none", default)]
+        ty: Option<String>,
+        #[serde(default = "one")]
+        lower: i32,
+        #[serde(default = "one")]
+        upper: i32,
+        #[serde(default)]
+        parameters: Vec<ParameterSpec>,
+    },
+    AddLiteral {
+        owner: String,
+        name: String,
+    },
+    AddSuperType {
+        owner: String,
+        super_type: String,
+    },
+    RemoveSuperType {
+        owner: String,
+        super_type: String,
+    },
+    /// Changes properties of a package, classifier, feature, operation or literal. Renaming
+    /// updates the references to the element in the document (types, supertypes, opposites),
+    /// not in its OCL expressions.
+    Update {
+        element: String,
+        properties: ElementUpdate,
+    },
+    /// Deletes elements, the references typed by deleted classes, and the supertypes and
+    /// opposites that refer to deleted elements.
+    Delete {
+        elements: Vec<String>,
+    },
+}
+
+/// The text edits that make a [`MetamodelEdit`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetamodelEditResult {
+    /// Non-overlapping edits in document order; ranges refer to the text before the edit.
+    pub edits: Vec<TextEdit>,
+    /// The id of the added or renamed element.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub element: Option<String>,
+}
+
+// ------------------------------------------------------------------ transformation diagrams
+
+/// The syntax of a transformation document shown as rule diagrams.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransformationSyntax {
+    /// Henshin's textual syntax (`.henshin_text`).
+    Text,
+    /// Henshin's model (`.henshin`).
+    Model,
+}
+
+/// What a rule does with a node, edge or attribute: Henshin's actions (drawn as `«create»`
+/// and so on, in Henshin's colors).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleAction {
+    Preserve,
+    Create,
+    Delete,
+    /// Part of a negative application condition.
+    Forbid,
+    /// Part of a positive application condition.
+    Require,
+}
+
+/// The rules and units of a Henshin document (of either syntax), for drawing them in Henshin's
+/// notation (see `transformationDiagram`). Elements are identified by ids made of names: a rule
+/// `r`, a multi-rule `r/m` (nested: `r/m/n`), a condition graph of a matching formula `r#g`
+/// (in a multi-rule `r/m#g`, nested in another `r#g#h`); a node `<scope>::n`, an edge
+/// `<scope>::s->t:ref`, an attribute `<scope>::n.a` (the scope it is written in: a multi-rule
+/// or a condition graph can add attributes to an enclosing node); a unit `u`, the elements of
+/// its body `u@1`, `u@2.1`, …; a repeated id gets `#2`, `#3`, ….
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationDiagram {
+    pub syntax: TransformationSyntax,
+    /// The imported packages, as written.
+    pub imports: Vec<String>,
+    pub rules: Vec<RuleDiagram>,
+    pub units: Vec<UnitDiagram>,
+    /// The classes nodes can have: those of the imported packages first.
+    pub classes: Vec<NodeClass>,
+    /// The types parameters can have, as written.
+    pub types: Vec<String>,
+    pub problems: Vec<DiagramProblem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationParameterSpec {
+    /// `in`, `out`, `inout`, `var`, or `unknown` (no kind given).
+    pub kind: String,
+    pub name: String,
+    /// The type as written (none for parameters without a type).
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none", default)]
+    pub ty: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleDiagram {
+    pub id: String,
+    pub name: String,
+    pub parameters: Vec<TransformationParameterSpec>,
+    pub check_dangling: bool,
+    pub injective_matching: bool,
+    /// Attribute conditions, as written.
+    pub conditions: Vec<String>,
+    pub java_imports: Vec<String>,
+    /// The multi-rules, nested ones too (their elements are among the rule's nodes and edges).
+    pub multi_rules: Vec<MultiRuleDiagram>,
+    /// The matching formulas (their condition graphs' elements are among the nodes and edges).
+    pub formulas: Vec<FormulaDiagram>,
+    pub nodes: Vec<RuleNodeDiagram>,
+    pub edges: Vec<RuleEdgeDiagram>,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiRuleDiagram {
+    pub id: String,
+    pub name: String,
+    /// The rule or multi-rule it is a multi-rule of.
+    pub kernel: String,
+    pub check_dangling: bool,
+    pub injective_matching: bool,
+    pub conditions: Vec<String>,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaDiagram {
+    /// The rule, multi-rule or condition graph the formula belongs to.
+    pub scope: String,
+    /// The formula as written (`!a AND (b OR c)`).
+    pub formula: String,
+    /// The ids of its condition graphs.
+    pub graphs: Vec<String>,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleNodeDiagram {
+    pub id: String,
+    pub name: String,
+    /// The class as written.
+    pub class: String,
+    /// The qualified name of the class, if it is resolved.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub class_id: Option<String>,
+    pub action: RuleAction,
+    /// The multi-rule the node belongs to (its id); none for nodes of the rule itself.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub multi: Option<String>,
+    /// The condition graph the node belongs to (its id).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub condition: Option<String>,
+    pub attributes: Vec<RuleAttributeDiagram>,
+    /// The node is a parameter of the rule.
+    pub parameter: bool,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleAttributeDiagram {
+    pub id: String,
+    pub name: String,
+    /// The value as written.
+    pub value: String,
+    pub action: RuleAction,
+    /// `set name=value`: the value the attribute gets.
+    pub set: bool,
+    /// The multi-rule or condition graph the attribute is written in, if not the node's own.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scope: Option<String>,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleEdgeDiagram {
+    pub id: String,
+    /// Node ids.
+    pub source: String,
+    pub target: String,
+    pub reference: String,
+    pub action: RuleAction,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub multi: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub condition: Option<String>,
+    pub range: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnitDiagram {
+    pub id: String,
+    pub name: String,
+    pub parameters: Vec<TransformationParameterSpec>,
+    pub body: Vec<UnitStepDiagram>,
+    /// The body as written in the textual syntax (one element per line).
+    pub text: String,
+    pub range: Range,
+}
+
+/// An element of a unit's body.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnitStepDiagram {
+    pub id: String,
+    /// `call`, `sequence`, `independent`, `priority`, `if`, `for`, `while`, `strict` or
+    /// `rollback`.
+    pub kind: String,
+    /// The rule or unit a call calls.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub arguments: Vec<String>,
+    /// The number of iterations of `for`, as written.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub count: Option<String>,
+    /// The value of `strict` and `rollback`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub value: Option<bool>,
+    /// The nested lists: a sequence's elements; the choices of `independent` and `priority`;
+    /// the condition, `then` and `else` of `if`; the body of `for` and `while`.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub children: Vec<Vec<UnitStepDiagram>>,
+    pub range: Range,
+}
+
+/// A class that nodes can have.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeClass {
+    /// The qualified name (`pkg::Class`).
+    pub id: String,
+    /// The name as rules write it.
+    pub name: String,
+    pub is_abstract: bool,
+    /// The class and its supertypes (ids), for telling which references fit.
+    pub conforms_to: Vec<String>,
+    /// Attributes, inherited ones too.
+    pub attributes: Vec<NodeClassAttribute>,
+    /// References, inherited ones too.
+    pub references: Vec<NodeClassReference>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeClassAttribute {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: String,
+    /// The literals of an enumeration-typed attribute.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub literals: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeClassReference {
+    pub name: String,
+    /// The id of the target class.
+    pub target: String,
+    pub containment: bool,
+    pub many: bool,
+}
+
+/// A change of a transformation document, made by editing its text (see
+/// `editTransformation`). Elements are named by their diagram ids; classes, types and values
+/// are written as in the textual syntax.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TransformationEdit {
+    AddRule {
+        name: String,
+    },
+    AddUnit {
+        name: String,
+    },
+    /// Renames a rule, unit, multi-rule, condition graph or node, and what refers to it in the
+    /// document (calls, edges, `reuse`, formulas, node parameters).
+    Rename {
+        element: String,
+        name: String,
+    },
+    /// Deletes rules, units, multi-rules, nodes (with their edges), edges, attributes and the
+    /// elements of units; deleting a rule or unit deletes its calls.
+    Delete {
+        elements: Vec<String>,
+    },
+    /// Replaces the parameters of a rule or unit.
+    SetParameters {
+        element: String,
+        parameters: Vec<TransformationParameterSpec>,
+    },
+    /// Changes the matching options of a rule or multi-rule.
+    SetRuleOptions {
+        element: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        check_dangling: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        injective_matching: Option<bool>,
+    },
+    /// Replaces the attribute conditions of a rule or multi-rule.
+    SetConditions {
+        element: String,
+        conditions: Vec<String>,
+    },
+    /// Adds a node to a rule, multi-rule or condition graph.
+    AddNode {
+        scope: String,
+        name: String,
+        class: String,
+        action: RuleAction,
+    },
+    /// Changes a node's class or action. Changing the action changes the actions of its
+    /// edges and attributes so that they fit (an edge of a created node is created, …).
+    UpdateNode {
+        element: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        class: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        action: Option<RuleAction>,
+    },
+    /// Adds an edge between two nodes, to the scope given (default: the innermost scope of
+    /// the two nodes).
+    AddEdge {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        scope: Option<String>,
+        source: String,
+        target: String,
+        reference: String,
+        action: RuleAction,
+    },
+    UpdateEdge {
+        element: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        action: Option<RuleAction>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        reference: Option<String>,
+    },
+    /// Adds an attribute to a node, written in `scope` (default: the node's own; a multi-rule
+    /// or condition graph adds it with `reuse`).
+    AddAttribute {
+        node: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        scope: Option<String>,
+        name: String,
+        value: String,
+        /// An action different from the node's (`create`, `delete`, `forbid`, `require`).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        action: Option<RuleAction>,
+        /// `set name=value`.
+        #[serde(default)]
+        set: bool,
+    },
+    UpdateAttribute {
+        element: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        value: Option<String>,
+        /// The action (the node's own action is written without a keyword).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        action: Option<RuleAction>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        set: Option<bool>,
+    },
+    /// Adds a multi-rule to a rule or multi-rule.
+    AddMultiRule {
+        scope: String,
+        name: String,
+    },
+    /// Replaces the body of a unit with elements written in the textual syntax.
+    SetUnitBody {
+        element: String,
+        body: String,
+    },
+}
+
+/// The text edits that make a [`TransformationEdit`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformationEditResult {
+    /// Non-overlapping edits in document order; ranges refer to the text before the edit.
+    pub edits: Vec<TextEdit>,
+    /// The id of the added or renamed element.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub element: Option<String>,
 }

@@ -9,6 +9,7 @@ use oxy_ecore::{Metamodel, PackageId};
 
 use crate::diagnostic::Diagnostic;
 use crate::env::{Environment, lookup_classifier, resolve_type};
+use crate::resolution::{Analysis, Property, Resolution, UserOperation};
 use crate::span::Span;
 use crate::syntax::ast::*;
 use crate::types::{CollectionKind, Type, library_type};
@@ -26,6 +27,8 @@ pub(crate) struct Checker<'a> {
     scopes: Vec<Scope>,
     diags: Vec<Diagnostic>,
     types: Vec<(Span, Type)>,
+    /// Types and resolutions by expression, for tools that translate OCL.
+    analysis: Analysis,
     /// Whether `@pre` may be used (only in postconditions).
     at_pre_allowed: bool,
 }
@@ -46,6 +49,7 @@ impl<'a> Checker<'a> {
             scopes: vec![Scope { vars: Vec::new(), implicit: None }],
             diags: Vec::new(),
             types: Vec::new(),
+            analysis: Analysis::default(),
             at_pre_allowed: false,
         }
     }
@@ -73,6 +77,14 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn take_types(&mut self) -> Vec<(Span, Type)> {
         std::mem::take(&mut self.types)
+    }
+
+    pub(crate) fn take_analysis(&mut self) -> Analysis {
+        std::mem::take(&mut self.analysis)
+    }
+
+    fn resolved(&mut self, e: &Expr, r: Resolution) {
+        self.analysis.resolutions.insert(e.id, r);
     }
 
     fn error(&mut self, span: Span, message: impl Into<String>) {
@@ -110,6 +122,7 @@ impl<'a> Checker<'a> {
         }
         let t = self.check_inner(e);
         self.types.push((e.span, t.clone()));
+        self.analysis.types.insert(e.id, t.clone());
         t
     }
 
@@ -131,7 +144,13 @@ impl<'a> Checker<'a> {
                 self.error(e.span, "'self' is not defined here (no context class)");
                 Type::Error
             }),
-            ExprKind::Name { path, .. } => self.resolve_name(path, e.span),
+            ExprKind::Name { path, .. } => {
+                let (t, r) = self.resolve_name(path, e.span);
+                if let Some(r) = r {
+                    self.resolved(e, r);
+                }
+                t
+            }
             ExprKind::TypeLit(te) => {
                 let mut diags = Vec::new();
                 let t = resolve_type(self.mm, self.package, te, &mut diags);
@@ -140,8 +159,13 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Property { source, name, .. } => {
                 let src = self.check(source);
-                match self.property_type(&src, &name.name) {
-                    Some(t) => t,
+                match self.property(&src, &name.name) {
+                    Some((t, property, collect)) => {
+                        if let Some(property) = property {
+                            self.resolved(e, Resolution::Property { property, collect });
+                        }
+                        t
+                    }
                     None => {
                         let msg = self.unknown_property_message(&src, &name.name);
                         self.error(name.span, msg);
@@ -152,11 +176,19 @@ impl<'a> Checker<'a> {
             ExprKind::Call { source: Some(source), name, args, arrow, .. } => {
                 let src = self.check(source);
                 let args: Vec<(Type, Span)> = args.iter().map(|a| (self.check(a), a.span)).collect();
-                self.call_type(&src, name, &args, *arrow)
+                let (t, r) = self.call_type(&src, name, &args, *arrow);
+                if let Some(r) = r {
+                    self.resolved(e, r);
+                }
+                t
             }
             ExprKind::Call { source: None, name, args, .. } => {
                 let args: Vec<(Type, Span)> = args.iter().map(|a| (self.check(a), a.span)).collect();
-                self.implicit_call_type(name, &args)
+                let (t, r) = self.implicit_call_type(name, &args);
+                if let Some(r) = r {
+                    self.resolved(e, r);
+                }
+                t
             }
             ExprKind::Iterator { source, name, iterators, body, .. } => {
                 let src = self.check(source);
@@ -303,73 +335,87 @@ impl<'a> Checker<'a> {
 
     // ---------------------------------------------------------------- names
 
-    fn resolve_name(&mut self, path: &[Ident], span: Span) -> Type {
+    fn resolve_name(&mut self, path: &[Ident], span: Span) -> (Type, Option<Resolution>) {
         let mm = self.mm;
         if let [ident] = path {
             let name = ident.name.as_str();
             if let Some(t) = self.lookup_var(name) {
-                return t;
+                return (t, Some(Resolution::Variable));
             }
             let implicit: Vec<Type> = self.scopes.iter().rev().filter_map(|s| s.implicit.clone()).collect();
-            for src in &implicit {
-                if let Some(t) = self.property_type(src, name) {
-                    return t;
+            for (depth, src) in implicit.iter().enumerate() {
+                if let Some((t, property, _)) = self.property(src, name) {
+                    return (t, property.map(|property| Resolution::ImplicitProperty { depth, property }));
                 }
             }
             if let Some(t) = library_type(name) {
-                return Type::Meta(t.into());
+                return (Type::Meta(t.clone().into()), Some(Resolution::Type(t)));
             }
             if let Ok(c) = lookup_classifier(mm, self.package, &[name]) {
-                return Type::Meta(Type::of_classifier(mm, c).into());
+                let t = Type::of_classifier(mm, c);
+                return (Type::Meta(t.clone().into()), Some(Resolution::Type(t)));
             }
             let msg = match implicit.first() {
                 Some(t) if !t.is_error() => {
                     format!("unknown name '{name}' (not a variable, a property of {}, or a type)", self.show(t))
                 }
-                Some(_) => return Type::Error,
+                Some(_) => return (Type::Error, None),
                 None => format!("unknown name '{name}'"),
             };
             self.error(span, msg);
-            return Type::Error;
+            return (Type::Error, None);
         }
         let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
         let (last, head) = names.split_last().unwrap();
         if let Ok(c) = lookup_classifier(mm, self.package, head)
             && mm.is_enum(c)
         {
-            if mm.enum_literal_index(c, last).is_some() {
-                return Type::Classifier(c);
+            if let Some(literal) = mm.enum_literal_index(c, last) {
+                return (Type::Classifier(c), Some(Resolution::EnumLiteral { enumeration: c, literal }));
             }
             self.error(span, format!("enumeration '{}' has no literal '{last}'", mm.classifier(c).name));
-            return Type::Error;
+            return (Type::Error, None);
         }
         match lookup_classifier(mm, self.package, &names) {
-            Ok(c) => Type::Meta(Type::of_classifier(mm, c).into()),
+            Ok(c) => {
+                let t = Type::of_classifier(mm, c);
+                (Type::Meta(t.clone().into()), Some(Resolution::Type(t)))
+            }
             Err(e) => {
                 self.error(span, e);
-                Type::Error
+                (Type::Error, None)
             }
         }
     }
 
     // ---------------------------------------------------------------- properties
 
-    pub(crate) fn property_type(&self, src: &Type, name: &str) -> Option<Type> {
+    /// The type of property `name` of `src`, what it is (`None` when `src` is unknown), and
+    /// whether it is collected from the elements of a collection.
+    fn property(&self, src: &Type, name: &str) -> Option<(Type, Option<Property>, bool)> {
         let mm = self.mm;
         match src {
-            Type::Error => Some(Type::Error),
+            Type::Error => Some((Type::Error, None, false)),
             Type::Classifier(c) if mm.is_class(*c) => {
                 if let Some(f) = mm.lookup_feature(*c, name) {
-                    let f = mm.feature(f);
-                    return Some(Type::of_typed(mm, f.ty, &f.multiplicity));
+                    let feature = mm.feature(f);
+                    return Some((
+                        Type::of_typed(mm, feature.ty, &feature.multiplicity),
+                        Some(Property::Feature(f)),
+                        false,
+                    ));
                 }
-                self.env.find_def_attribute(mm, *c, name).map(|d| d.ty.clone())
+                let d = self.env.find_def_attribute(mm, *c, name)?;
+                Some((d.ty.clone(), Some(Property::DefAttribute { class: d.class, name: d.name.clone() }), false))
             }
-            Type::Tuple(parts) => parts.iter().find(|(n, _)| n == name).map(|(_, t)| t.clone()),
-            Type::Meta(_) if name == "name" => Some(Type::String),
+            Type::Tuple(parts) => parts
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, t)| (t.clone(), Some(Property::TuplePart(name.to_string())), false)),
+            Type::Meta(_) if name == "name" => Some((Type::String, Some(Property::TypeName), false)),
             Type::Collection(k, e) => {
-                let t = self.property_type(e, name)?;
-                Some(Type::collection(k.collect_kind(), t.flattened_element()))
+                let (t, property, _) = self.property(e, name)?;
+                Some((Type::collection(k.collect_kind(), t.flattened_element()), property, true))
             }
             _ => None,
         }
@@ -402,11 +448,21 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn call_type(&mut self, src: &Type, name: &Ident, args: &[(Type, Span)], arrow: bool) -> Type {
+    fn call_type(
+        &mut self,
+        src: &Type,
+        name: &Ident,
+        args: &[(Type, Span)],
+        arrow: bool,
+    ) -> (Type, Option<Resolution>) {
+        let library = |collect: bool, t: Type| {
+            let r = (!t.is_error()).then_some(Resolution::Library { collect });
+            (t, r)
+        };
         if src.is_error() {
             return match self.oclany_op(src, &name.name, args) {
-                Lookup::Found(t) => t,
-                _ => Type::Error,
+                Lookup::Found(t) => (t, None),
+                _ => (Type::Error, None),
             };
         }
         if arrow {
@@ -418,40 +474,56 @@ impl<'a> Checker<'a> {
                 Type::collection(CollectionKind::Set, src.clone())
             };
             let l = self.collection_op(&coll, &name.name, args);
-            return self.report(l, name, &coll);
+            return library(false, self.report(l, name, &coll));
         }
         if let Type::Collection(k, e) = src {
             let element_wise = is_element_wise_type_op(&name.name, args.iter().map(|(t, _)| t));
             if !element_wise && let Lookup::Found(t) = self.oclany_op(src, &name.name, args) {
-                return t;
+                return library(false, t);
             }
             // Implicit collect: `coll.op()` is `coll->collect(op())` (classic OCL).
-            let mut l = self.user_op(e, &name.name, args);
+            let (mut l, mut operation) = self.user_op(e, &name.name, args);
             if matches!(l, Lookup::NotFound) && !e.is_collection() {
                 l = self.library_op(e, &name.name, args);
+                operation = None;
             }
             if let Lookup::Found(t) = &l {
-                return Type::collection(k.collect_kind(), t.flattened_element());
+                let t = Type::collection(k.collect_kind(), t.flattened_element());
+                let r = match operation {
+                    Some(operation) => Resolution::Operation { operation, implicit: None, collect: true },
+                    None => Resolution::Library { collect: true },
+                };
+                return (t, Some(r));
             }
             if !matches!(self.collection_op(src, &name.name, args), Lookup::NotFound) {
                 self.error(name.span, format!("'{}' is a collection operation; use '->{}'", name.name, name.name));
-                return Type::Error;
+                return (Type::Error, None);
             }
-            return self.report(l, name, src);
+            return (self.report(l, name, src), None);
         }
-        let mut l = self.user_op(src, &name.name, args);
+        let (l, operation) = self.user_op(src, &name.name, args);
+        if let Some(operation) = operation {
+            let t = self.report(l, name, src);
+            return (t, Some(Resolution::Operation { operation, implicit: None, collect: false }));
+        }
         if matches!(l, Lookup::NotFound) {
-            l = self.library_op(src, &name.name, args);
+            let l = self.library_op(src, &name.name, args);
+            return library(false, self.report(l, name, src));
         }
-        self.report(l, name, src)
+        (self.report(l, name, src), None)
     }
 
-    fn implicit_call_type(&mut self, name: &Ident, args: &[(Type, Span)]) -> Type {
+    fn implicit_call_type(&mut self, name: &Ident, args: &[(Type, Span)]) -> (Type, Option<Resolution>) {
         let implicit: Vec<Type> = self.scopes.iter().rev().filter_map(|s| s.implicit.clone()).collect();
-        for src in &implicit {
-            let l = self.user_op(src, &name.name, args);
+        for (depth, src) in implicit.iter().enumerate() {
+            let (l, operation) = self.user_op(src, &name.name, args);
             if !matches!(l, Lookup::NotFound) {
-                return self.report(l, name, src);
+                let r = operation.map(|operation| Resolution::Operation {
+                    operation,
+                    implicit: Some(depth),
+                    collect: false,
+                });
+                return (self.report(l, name, src), r);
             }
         }
         // Library operations apply to the innermost implicit source (iterator element or self).
@@ -459,21 +531,24 @@ impl<'a> Checker<'a> {
             Some(src) => {
                 let src = src.clone();
                 let l = self.library_op(&src, &name.name, args);
-                self.report(l, name, &src)
+                let t = self.report(l, name, &src);
+                let r = (!t.is_error()).then_some(Resolution::Library { collect: false });
+                (t, r)
             }
             None => {
                 self.error(name.span, format!("unknown operation '{}'", name.name));
-                Type::Error
+                (Type::Error, None)
             }
         }
     }
 
-    /// Operations defined by the metamodel (EOperations) or by `def:`.
-    fn user_op(&self, src: &Type, name: &str, args: &[(Type, Span)]) -> Lookup {
+    /// Operations defined by the metamodel (EOperations) or by `def:`, and which one was
+    /// found.
+    fn user_op(&self, src: &Type, name: &str, args: &[(Type, Span)]) -> (Lookup, Option<UserOperation>) {
         let mm = self.mm;
-        let Type::Classifier(c) = src else { return Lookup::NotFound };
+        let Type::Classifier(c) = src else { return (Lookup::NotFound, None) };
         if !mm.is_class(*c) {
-            return Lookup::NotFound;
+            return (Lookup::NotFound, None);
         }
         let mut arity_mismatch = None;
         for op in mm.lookup_operations(*c, name) {
@@ -481,11 +556,8 @@ impl<'a> Checker<'a> {
             let params: Vec<Type> = o.params.iter().map(|p| Type::of_typed(mm, p.ty, &p.multiplicity)).collect();
             match self.check_args(args, &params) {
                 Ok(()) => {
-                    return Lookup::Found(if o.ty.is_some() {
-                        Type::of_typed(mm, o.ty, &o.multiplicity)
-                    } else {
-                        Type::OclVoid
-                    });
+                    let t = if o.ty.is_some() { Type::of_typed(mm, o.ty, &o.multiplicity) } else { Type::OclVoid };
+                    return (Lookup::Found(t), Some(UserOperation::Operation(op)));
                 }
                 Err(e) => arity_mismatch = Some(e),
             }
@@ -493,11 +565,14 @@ impl<'a> Checker<'a> {
         for d in self.env.find_def_operations(mm, *c, name) {
             let params: Vec<Type> = d.params.iter().map(|(_, t)| t.clone()).collect();
             match self.check_args(args, &params) {
-                Ok(()) => return Lookup::Found(d.ty.clone()),
+                Ok(()) => {
+                    let operation = UserOperation::Def { class: d.class, name: d.name.clone(), arity: d.params.len() };
+                    return (Lookup::Found(d.ty.clone()), Some(operation));
+                }
                 Err(e) => arity_mismatch = Some(e),
             }
         }
-        arity_mismatch.map_or(Lookup::NotFound, Lookup::BadArgs)
+        (arity_mismatch.map_or(Lookup::NotFound, Lookup::BadArgs), None)
     }
 
     fn check_args(&self, args: &[(Type, Span)], params: &[Type]) -> Result<(), String> {

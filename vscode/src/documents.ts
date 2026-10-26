@@ -33,6 +33,11 @@ function utf16Column(line: string, column: number): number {
   return index;
 }
 
+/** A VS Code position as an engine position (columns in Unicode scalar values). */
+export function fromVsPosition(doc: vscode.TextDocument, p: vscode.Position): Position {
+  return { line: p.line, column: [...doc.lineAt(p.line).text.slice(0, p.character)].length };
+}
+
 export function toVsPosition(doc: vscode.TextDocument, p: Position): vscode.Position {
   if (p.line >= doc.lineCount) return doc.lineAt(doc.lineCount - 1).range.end;
   return new vscode.Position(p.line, utf16Column(doc.lineAt(p.line).text, p.column));

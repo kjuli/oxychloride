@@ -1,12 +1,14 @@
-//! Editor support: hovers and completion for Complete OCL, OCLinEcore and HUTN documents.
+//! Editor support: hovers and completion for Complete OCL, OCLinEcore, HUTN and Henshin
+//! documents.
 
-use oxy_ecore::{ClassifierId, Metamodel};
+use oxy_ecore::{ClassifierId, ElementRef, Metamodel};
 use oxy_ocl::span::Position as OclPosition;
 use oxy_ocl::{SourceId, Type};
 
 use crate::protocol::*;
 use crate::workspace::{Compiled, Workspace, range};
 
+mod henshin;
 mod hutn;
 mod oclinecore;
 
@@ -153,6 +155,7 @@ impl Workspace {
         let offset = self.offset_in(text, position);
         match language {
             Language::Hutn => return self.hover_hutn(document, text, offset),
+            Language::Henshin | Language::HenshinModel => return self.hover_henshin(document, text, language, offset),
             // XMI is XML: the XML tooling (with the generated schemas) covers it.
             Language::Xmi => return None,
             Language::Ocl | Language::OclInEcore => {}
@@ -171,6 +174,25 @@ impl Workspace {
             return self.hover_oclinecore(document, text, offset);
         }
         None
+    }
+
+    /// The qualified name of the class whose definition in an open OCLinEcore document contains
+    /// `position` (anywhere in it, including its features and constraints).
+    pub fn class_at(&self, document: &str, position: Position) -> Option<String> {
+        if self.document_language(document)? != Language::OclInEcore {
+            return None;
+        }
+        let offset = self.offset_in(self.document_text(document)?, position) as u32;
+        let mm = self.metamodel();
+        self.oclinecore_document(document)?
+            .elements
+            .iter()
+            .filter_map(|(e, s)| match e {
+                ElementRef::Classifier(c) if mm.is_class(*c) && s.start <= offset && offset <= s.end => Some((*c, s)),
+                _ => None,
+            })
+            .min_by_key(|(_, s)| s.end - s.start)
+            .map(|(c, _)| mm.qualified_name(c))
     }
 
     /// Completion proposals at `position` in an open document.
@@ -202,7 +224,9 @@ impl Workspace {
                 let (items, start) = self.complete_hutn(document, text, word_start)?;
                 return Some(finish_completion(text, start, offset, items));
             }
-            Language::Xmi => return None,
+            Language::Henshin => self.complete_henshin(text, word_start),
+            // `.henshin` files are XML: they are edited as rule diagrams.
+            Language::Xmi | Language::HenshinModel => return None,
         };
         Some(finish_completion(text, word_start, offset, items))
     }

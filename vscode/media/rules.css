@@ -1,0 +1,215 @@
+/* The rule diagram (webview/rules), on top of diagram.css. The colors of actions are those of
+   Henshin's color modes (org.eclipse.emf.henshin.edit/colorModes): "Default" in light themes,
+   "Dark" in dark ones, which keeps the nodes' colors and darkens the rules and units. */
+
+:root {
+  /* Foreground (border, stereotype, line) and background of each action. */
+  --preserve-fg: rgb(128, 128, 128);
+  --preserve-bg: rgb(238, 238, 238);
+  --create-fg: rgb(0, 200, 0);
+  --create-bg: rgb(221, 255, 221);
+  --delete-fg: rgb(255, 0, 0);
+  --delete-bg: rgb(255, 221, 221);
+  --forbid-fg: rgb(0, 0, 255);
+  --forbid-bg: rgb(221, 221, 255);
+  --require-fg: rgb(170, 68, 0);
+  --require-bg: rgb(255, 238, 221);
+  /* Rules, units and invocations. */
+  --rule-bg: rgb(255, 255, 255);
+  --rule-fg: rgb(0, 0, 0);
+  --unit-bg: rgb(255, 255, 255);
+  --unit-fg: rgb(0, 0, 0);
+  --invocation-bg: rgb(238, 238, 238);
+  --invocation-fg: rgb(0, 0, 0);
+  /* Attribute conditions (Henshin's condition figure). */
+  --condition-fg: rgb(255, 204, 102);
+  --condition-bg: rgb(255, 255, 203);
+  --node-text: rgb(0, 0, 0);
+}
+
+body.vscode-dark,
+body.vscode-high-contrast:not(.vscode-high-contrast-light) {
+  --rule-bg: rgb(0, 16, 0);
+  --rule-fg: rgb(255, 255, 255);
+  --unit-bg: rgb(0, 0, 16);
+  --unit-fg: rgb(255, 255, 255);
+  --invocation-bg: rgb(138, 138, 138);
+  --invocation-fg: rgb(255, 255, 255);
+}
+
+.action-preserve { --fg: var(--preserve-fg); --bg: var(--preserve-bg); }
+.action-create { --fg: var(--create-fg); --bg: var(--create-bg); }
+.action-delete { --fg: var(--delete-fg); --bg: var(--delete-bg); }
+.action-forbid { --fg: var(--forbid-fg); --bg: var(--forbid-bg); }
+.action-require { --fg: var(--require-fg); --bg: var(--require-bg); }
+
+/* ------------------------------------------------------------------ rules */
+
+.react-flow__node-rule { background: none; border: none; padding: 0; }
+.rule-frame {
+  width: 100%; height: 100%; box-sizing: border-box;
+  background: var(--rule-bg); color: var(--rule-fg);
+  border: 1.5px solid var(--rule-fg); border-radius: 6px;
+  font-size: 12px;
+}
+.rule-frame.focused, .react-flow__node.selected > .rule-frame { outline: 2px solid var(--active); outline-offset: 2px; }
+.rule-frame.has-problems { border-color: var(--error); }
+.rule-frame.accepts { cursor: copy; }
+.rule-frame header, .unit-frame header {
+  display: flex; align-items: center; gap: 6px; padding: 7px 10px 6px; white-space: nowrap; overflow: hidden;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule-fg) 30%, transparent); cursor: grab;
+}
+.rule-icon, .unit-icon { flex: none; width: 10px; height: 10px; border: 1.5px solid currentColor; border-radius: 2px; }
+.unit-icon { border-radius: 50%; }
+.rule-keyword { color: color-mix(in srgb, currentColor 60%, transparent); font-size: 11px; }
+.rule-name { font-weight: 600; font-size: 12.5px; }
+.rule-params { font-family: var(--vscode-editor-font-family); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+.rule-frame .tag, .multi-note .tag {
+  flex: none; padding: 0 5px; border-radius: 3px; font-size: 10.5px;
+  border: 1px solid color-mix(in srgb, var(--rule-fg) 35%, transparent);
+}
+.rule-frame .badge, .unit-frame .badge { margin-left: auto; }
+.condition-note, .formula-note {
+  margin: 4px 10px 0; padding: 1px 7px; border-radius: 6px; width: fit-content; max-width: calc(100% - 20px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--vscode-editor-font-family); font-size: 11px; line-height: 18px;
+  color: rgb(0, 0, 0); background: var(--condition-bg); border: 1px solid var(--condition-fg);
+}
+.formula-note { background: var(--forbid-bg); border-color: var(--forbid-fg); }
+.multi-note { display: flex; gap: 4px; margin: 4px 10px 0; flex-wrap: wrap; }
+.multi-note .tag { cursor: pointer; }
+
+/* ------------------------------------------------------------------ nodes of rules */
+
+.rule-node {
+  position: relative; min-width: 110px; max-width: 360px;
+  background: var(--bg); color: var(--node-text);
+  border: 1.5px solid var(--fg); border-radius: 1px;
+  font-size: 12px; text-align: center;
+}
+/* Nodes of multi-rules are drawn stacked, as in Henshin. */
+.rule-node.multi { box-shadow: 5px 5px 0 -1.5px var(--bg), 5px 5px 0 0 color-mix(in srgb, var(--fg) 50%, white); }
+.rule-node.focused, .react-flow__node.selected > .rule-node { outline: 2px solid var(--active); outline-offset: 2px; }
+.rule-node.has-problems { outline: 2px dashed var(--error); outline-offset: 2px; }
+.rule-node .stereotype { color: var(--fg); font-size: 11px; padding: 3px 8px 0; line-height: 14px; }
+.rule-node .node-name { padding: 0 8px 4px; font-family: var(--vscode-editor-font-family); font-size: 12px; line-height: 18px; white-space: nowrap; }
+.rule-node .node-name .name.parameter { text-decoration: underline; text-decoration-style: dotted; }
+.rule-node .attributes { border-top: 1px solid var(--fg); padding: 2px 0; text-align: left; }
+.rule-node .attribute {
+  display: flex; gap: 5px; padding: 0 8px; line-height: 17px; white-space: nowrap;
+  font-family: var(--vscode-editor-font-family); font-size: 11.5px; color: var(--node-text);
+}
+.rule-node .attribute .stereotype { padding: 0; color: var(--fg); font-family: var(--vscode-font-family); font-size: 10.5px; }
+.rule-node .attribute.focused { background: color-mix(in srgb, var(--active) 18%, transparent); outline: 1px solid var(--active); }
+.rule-node .attribute.has-problems .label { text-decoration: underline wavy var(--error); text-underline-offset: 3px; }
+.rule-node .inline-edit input { color: var(--vscode-input-foreground); }
+.rule-node .add {
+  position: absolute; right: 2px; bottom: 1px; width: 15px; height: 15px; padding: 0; line-height: 13px;
+  border: none; border-radius: 3px; background: none; color: var(--fg); cursor: pointer; opacity: 0;
+}
+.rule-node:hover .add { opacity: 0.85; }
+
+.react-flow .react-flow__node .react-flow__handle.cover-target,
+.react-flow .react-flow__node .react-flow__handle.cover-source {
+  inset: 0; width: auto; height: auto; min-width: 0; min-height: 0; transform: none;
+  border: none; border-radius: 1px; background: transparent;
+}
+.react-flow .react-flow__node .react-flow__handle.cover-target { pointer-events: none; }
+.diagram-app.connecting .react-flow__node-object .react-flow__handle.cover-target { pointer-events: all; z-index: 10; }
+.diagram-app.connecting .react-flow__node-object:hover .react-flow__handle.cover-target { box-shadow: 0 0 0 2px var(--active); }
+.react-flow .react-flow__node .react-flow__handle.cover-source { z-index: 5; cursor: crosshair; }
+.react-flow .react-flow__node .react-flow__handle.connector {
+  width: 10px; height: 10px; right: -6px; border: 2px solid var(--vscode-editor-background); background: var(--active);
+  opacity: 0; transition: opacity 0.1s;
+}
+.react-flow__node:hover > div > .react-flow__handle.connector, .react-flow__node-object:hover .react-flow__handle.connector { opacity: 1; }
+.diagram-app.tool-edge .react-flow__handle.connector, .diagram-app.connecting .react-flow__handle.connector { display: none; }
+.diagram-app.tool-node .react-flow__node-rule { cursor: copy; }
+.diagram-app.tool-edge .react-flow__node-object { cursor: crosshair; }
+
+/* ------------------------------------------------------------------ edges */
+
+.react-flow__edge-path.rule-edge { stroke: var(--fg); stroke-width: 1.5; }
+.react-flow__edge-path.rule-edge.active { stroke-width: 2.5; filter: drop-shadow(0 0 2px var(--active)); }
+.react-flow__edge-path.rule-edge.has-problems { stroke-dasharray: 4 3; }
+.henshin-arrow { fill: var(--fg); stroke: var(--fg); stroke-width: 1; }
+.rule-edge-label {
+  position: absolute; pointer-events: all; cursor: pointer; white-space: nowrap; display: flex; flex-direction: column; align-items: center;
+  padding: 0 3px; border-radius: 2px; font-size: 11px; line-height: 13px;
+  background: color-mix(in srgb, var(--rule-bg) 85%, transparent); color: var(--rule-fg);
+}
+.rule-edge-label .stereotype { color: var(--fg); font-size: 10.5px; }
+.rule-edge-label .reference { font-family: var(--vscode-editor-font-family); }
+.rule-edge-label.focused { box-shadow: 0 0 0 1px var(--active); }
+
+/* ------------------------------------------------------------------ units */
+
+.react-flow__node-unit { background: none; border: none; padding: 0; }
+.unit-frame {
+  min-width: 220px; background: var(--unit-bg); color: var(--unit-fg);
+  border: 1.5px solid var(--unit-fg); border-radius: 12px; font-size: 12px;
+}
+.unit-frame.focused, .react-flow__node.selected > .unit-frame { outline: 2px solid var(--active); outline-offset: 2px; }
+.unit-frame.has-problems { border-color: var(--error); }
+.unit-frame header { border-bottom-color: color-mix(in srgb, var(--unit-fg) 30%, transparent); }
+.flow { display: flex; flex-direction: column; align-items: center; gap: 0; padding: 10px 14px 12px; }
+.flow > .steps, .steps { display: flex; flex-direction: column; align-items: center; }
+/* Arrows between the elements of a sequence. */
+.steps > * + *, .flow > .steps, .flow > .symbol.end { position: relative; margin-top: 18px; }
+.steps > * + *::before, .flow > .steps::before, .flow > .symbol.end::before {
+  content: ""; position: absolute; top: -17px; left: 50%; height: 15px; border-left: 1.5px solid var(--unit-fg);
+}
+.flow > .steps:empty { display: none; }
+.symbol { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--unit-fg); }
+.symbol.start { background: var(--unit-fg); }
+.symbol.end { box-shadow: inset 0 0 0 3px var(--unit-bg); background: var(--unit-fg); }
+.invocation {
+  padding: 3px 10px; border-radius: 3px; white-space: nowrap; cursor: pointer;
+  font-family: var(--vscode-editor-font-family); font-size: 11.5px;
+  background: var(--invocation-bg); color: var(--invocation-fg); border: 1px solid var(--invocation-fg);
+}
+.invocation.has-problems { border-color: var(--error); text-decoration: underline wavy var(--error); }
+.invocation.focused, .control.focused, .unit-flag.focused { outline: 2px solid var(--active); outline-offset: 1px; }
+.control {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 10px 8px;
+  border: 1px dashed color-mix(in srgb, var(--unit-fg) 55%, transparent); border-radius: 6px;
+}
+.control-label { align-self: flex-start; font-size: 10.5px; color: color-mix(in srgb, var(--unit-fg) 70%, transparent); }
+.branches { display: flex; gap: 14px; align-items: flex-start; }
+.branch { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.branch-index { font-size: 10px; color: color-mix(in srgb, var(--unit-fg) 60%, transparent); }
+.unit-flag { font-size: 10.5px; padding: 0 6px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--unit-fg) 40%, transparent); }
+
+/* ------------------------------------------------------------------ toolbar and panels */
+
+.toolbar .choice { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.action-select { color: var(--fg); font-weight: 600; }
+.toolbar .pair { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); margin-right: 4px; }
+.toolbar .pair.out-of-sync { color: var(--vscode-editorWarning-foreground, #cca700); }
+.reference-picker {
+  position: fixed; z-index: 30; min-width: 140px; padding: 4px 0; transform: translate(8px, 8px);
+  background: var(--vscode-menu-background, var(--node-bg)); color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--node-border)); border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.reference-picker .picker-title { padding: 2px 10px 4px; font-size: 11px; color: var(--muted); }
+.reference-picker button {
+  display: block; width: 100%; text-align: left; padding: 3px 10px; border: none; background: none; color: inherit; cursor: pointer;
+  font-family: var(--vscode-editor-font-family);
+}
+.reference-picker button:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
+.properties .field.area { grid-template-columns: 1fr; }
+.properties textarea {
+  min-width: 0; font-family: var(--vscode-editor-font-family); font-size: 12px; padding: 4px 5px; resize: vertical;
+  color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px;
+}
+.properties .inline-form { display: flex; gap: 4px; margin: 6px 0; align-items: center; }
+.properties .inline-form input {
+  min-width: 0; flex: 1; font: inherit; padding: 3px 5px;
+  color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px;
+}
+.properties .inline-form button { margin-top: 0; }
+.properties .attribute-row { font-family: var(--vscode-editor-font-family); font-size: 12px; margin: 2px 0; }
+.properties .attribute-row .muted { color: var(--fg); font-family: var(--vscode-font-family); font-size: 11px; }
+.properties code { font-family: var(--vscode-editor-font-family); font-size: 11.5px; }

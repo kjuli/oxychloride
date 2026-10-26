@@ -1,0 +1,10 @@
+[package]
+name = "oxy-codegen"
+description = "Code generation from Ecore metamodels and their OCL: native domain models with validation (Python, Rust)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-ecore.workspace = true
+oxy-ocl.workspace = true

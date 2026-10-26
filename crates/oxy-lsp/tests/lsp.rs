@@ -139,3 +139,33 @@ fn checks_xmi_documents() {
     let diagnostics = client.diagnostics(&uri, |d| !d.is_empty());
     assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
 }
+
+#[test]
+fn transforms_models_with_henshin_documents() {
+    let folder = format!("{EXAMPLES}/philosophers");
+    let mut client = Client::start(&folder);
+    let model = format!("{folder}/philosophers.hutn");
+    let rules = format!("{folder}/philosophers.henshin_text");
+    // The rules are loaded from the folder; open, they are checked like the other documents.
+    let (uri, text) = client.open(&rules, "henshin");
+    let diagnostics = client.diagnostics(&uri, |_| true);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    let line = text.lines().position(|l| l.contains("node fork:Fork")).unwrap();
+    let position = json!({ "line": line, "character": 17 });
+    let hover = client.request("textDocument/hover", json!({ "textDocument": { "uri": uri }, "position": position }));
+    let contents = hover.result.unwrap()["contents"]["value"].as_str().unwrap().to_string();
+    assert!(contents.contains("class philosophers::Fork"), "{contents}");
+
+    client.open(&model, "hutn");
+    let state = client.rpc("startTransformation", json!({ "model": model }));
+    let session = state["session"].clone();
+    let applied =
+        client.rpc("applyTransformation", json!({ "session": session, "document": rules, "unit": "takeLeft" }));
+    assert_eq!(applied["applied"], true, "{applied}");
+    assert_eq!(applied["state"]["changes"]["createdEdges"][0]["feature"], "holds");
+    let space = client.rpc(
+        "exploreStateSpace",
+        json!({ "session": session, "document": rules, "rules": ["takeLeft", "takeRight", "release"], "step": 0 }),
+    );
+    assert_eq!(space["states"].as_array().unwrap().len(), 14);
+}

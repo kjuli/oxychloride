@@ -1,13 +1,20 @@
 // Oxychloride for VS Code: a client of the engine's language server (`oxy lsp`) plus views
 // (metamodels, models, validation results), an OCL console, commands to create model content,
-// and XML Schemas for XMI models.
+// XML Schemas for XMI models, the metamodel diagram (a graphical editor for `.ecore` and
+// `.oclinecore` files), the rule diagram (a graphical editor for Henshin texts and `.henshin`
+// files, which are kept equivalent in pairs), the transformation view for Henshin rules, and
+// code generation.
 
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { LanguageClient, TransportKind, type LanguageClientOptions, type ServerOptions } from "vscode-languageclient/node";
+import { CodeGenerator, type CodeSource, type GenerateOptions } from "./codegen";
 import { OclConsole, type ConsoleContext } from "./console";
 import { Creator } from "./create";
+import { MetamodelDiagramEditor, openDiagram, type DiagramView } from "./diagram";
 import { documentName, reveal } from "./documents";
+import { HenshinPairs, counterpart } from "./henshinPairs";
+import { RuleDiagramEditor, openRuleDiagram, type RuleDiagramView } from "./ruleDiagram";
 import {
   Engine,
   errorMessage,
@@ -19,18 +26,28 @@ import {
 } from "./engine";
 import { SchemaRegistry } from "./schemas";
 import { serverExecutable } from "./server";
+import { TransformationPanel, chooseModel, chooseTransformation } from "./transformation";
 import { MetamodelTree, ModelTree, ValidationTree, shortName, type MetamodelNode, type ModelNode, type ValidationNode } from "./trees";
 
-const LANGUAGES = ["ocl", "oclinecore", "hutn"];
+const LANGUAGES = ["ocl", "oclinecore", "hutn", "henshin"];
 
 /** What the extension offers other extensions (and its tests). */
 export interface OxychlorideApi {
   engine: Engine;
   console: OclConsole;
   creator: Creator;
+  codeGenerator: CodeGenerator;
   metamodels: MetamodelTree;
   models: ModelTree;
   validation: ValidationTree;
+  /** The open metamodel diagrams. */
+  diagrams(): DiagramView[];
+  /** The open rule diagrams. */
+  ruleDiagrams(): RuleDiagramView[];
+  /** Keeps Henshin texts and `.henshin` files equivalent. */
+  pairs: HenshinPairs;
+  /** Opens the transformation view of a Henshin document (engine name) on a model resource. */
+  openTransformation(document: string, model: string, tab?: "steps" | "space"): Promise<TransformationPanel>;
   /** Resolves once the language server is running. */
   ready: Promise<void>;
 }
@@ -44,11 +61,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   const models = new ModelTree(engine);
   const validation = new ValidationTree();
   const creator = new Creator(engine, () => metamodels.packages);
+  const codeGenerator = new CodeGenerator(engine, context.workspaceState, output);
   const schemas = new SchemaRegistry(engine, context, output);
   const oclConsole = new OclConsole(engine, () => chooseContext(models.models));
 
   const refresh = async () => {
-    await Promise.all([metamodels.refresh(), models.refresh()]);
+    await Promise.all([metamodels.refresh(), models.refresh(), ...TransformationPanel.all().map((p) => p.refresh())]);
     await schemas.update();
   };
 
@@ -64,8 +82,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
           { scheme: "untitled", language },
         ]),
         { scheme: "file", language: "xml", pattern: "**/*.xmi" },
+        { scheme: "file", language: "xml", pattern: "**/*.henshin" },
       ],
-      synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{ocl,oclinecore,ecore}") },
+      synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{ocl,oclinecore,ecore,henshin_text,henshin}") },
       outputChannel: output,
     };
     client = new LanguageClient("oxychloride", "Oxychloride", serverOptions, clientOptions);
@@ -81,6 +100,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
       if (choice) void vscode.commands.executeCommand("workbench.action.openSettings", "oxychloride.server.path");
     });
   });
+
+  const pairs = new HenshinPairs(engine, ready.then(() => undefined));
 
   const setContext = (c: ConsoleContext | undefined) => {
     oclConsole.setContext(c);
@@ -101,6 +122,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
       if (e.affectsConfiguration("oxychloride.xmlSchemas")) void schemas.update();
     }),
     { dispose: () => void schemas.dispose() },
+    MetamodelDiagramEditor.register(context, engine, ready.then(() => undefined)),
+    pairs,
+    RuleDiagramEditor.register(context, engine, pairs, ready.then(() => undefined)),
   );
   creator.track(vscode.window.activeTextEditor);
 
@@ -114,6 +138,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   });
   register("oxychloride.createXmiInstance", (node?: MetamodelNode) => {
     if (node?.kind === "classifier") return creator.createXmiInstance(node.classifier);
+  });
+  // A metamodel file (Explorer, or the active editor): the user picks the class.
+  register("oxychloride.instantiateMetamodel", async (uri?: vscode.Uri) => {
+    uri = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
+    if (!uri) return;
+    await ready;
+    return creator.instantiate(uri);
+  });
+  // The class at the cursor of an OCLinEcore editor.
+  register("oxychloride.instantiateClass", async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (editor?.document.languageId !== "oclinecore") return;
+    await ready;
+    return creator.instantiate(editor.document.uri, editor.selection.active);
   });
   register("oxychloride.newModel", (node?: MetamodelNode) =>
     creator.newModel(node?.kind === "package" ? node.package : undefined),
@@ -310,6 +348,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     }
   });
 
+  // A metamodel file (Explorer, editor), or a package of the metamodel view. From code, the
+  // second argument may answer the questions (`GenerateOptions`); the Explorer passes the
+  // selected files there instead.
+  register("oxychloride.generateCode", async (arg?: vscode.Uri | MetamodelNode, options?: GenerateOptions | vscode.Uri[]) => {
+    await ready;
+    let source: CodeSource | undefined;
+    if (arg instanceof vscode.Uri) {
+      source = { uri: arg };
+    } else if (arg?.kind === "package") {
+      const resource = arg.package.resource;
+      const file = /^([A-Za-z]:)?[\\/]/.test(resource) ? vscode.Uri.file(resource) : undefined;
+      source = { resource, label: arg.package.name, folder: file && vscode.Uri.joinPath(file, "..") };
+    } else {
+      const doc = vscode.window.activeTextEditor?.document;
+      if (doc && (doc.languageId === "oclinecore" || /\.ecore$/i.test(doc.uri.path))) source = { uri: doc.uri };
+    }
+    if (!source) {
+      const files = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        filters: { Metamodels: ["ecore", "oclinecore"] },
+        title: "Generate code for metamodel",
+      });
+      if (!files?.[0]) return undefined;
+      source = { uri: files[0] };
+    }
+    return codeGenerator.generate(source, Array.isArray(options) ? {} : options);
+  });
+
   register("oxychloride.exportSchema", async (node?: MetamodelNode) => {
     const folders = await vscode.window.showOpenDialog({
       canSelectFolders: true,
@@ -329,13 +395,100 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     }
   });
 
+  // ---------------------------------------------------------------- diagrams
+
+  // Beside the text editor; from code, `false` as the second argument opens it in place.
+  register("oxychloride.openDiagram", (uri?: vscode.Uri, beside?: unknown) =>
+    openDiagram(uri instanceof vscode.Uri ? uri : undefined, beside !== false),
+  );
+  // From a diagram: its text beside it.
+  register("oxychloride.openDiagramText", async (uri?: vscode.Uri) => {
+    const views = [...MetamodelDiagramEditor.all(), ...RuleDiagramEditor.all()];
+    const view = views.find((v) => v.panel.active) ?? views.find((v) => v.document.uri.toString() === uri?.toString());
+    const doc = view?.document ?? (uri instanceof vscode.Uri ? await vscode.workspace.openTextDocument(uri) : undefined);
+    if (doc) await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside });
+  });
+  // Henshin documents: the rule diagram beside the text (from code, `false` opens it in place).
+  register("oxychloride.openRuleDiagram", (uri?: vscode.Uri, beside?: unknown) =>
+    openRuleDiagram(uri instanceof vscode.Uri ? uri : RuleDiagramEditor.all().find((v) => v.panel.active)?.document.uri, beside !== false),
+  );
+  // Writes a Henshin text as a `.henshin` file next to it (or the other way round); from then
+  // on the two are kept equivalent.
+  register("oxychloride.createHenshinCounterpart", async (uri?: vscode.Uri) => {
+    uri = uri instanceof vscode.Uri ? uri : (vscode.window.activeTextEditor?.document.uri ?? RuleDiagramEditor.all().find((v) => v.panel.active)?.document.uri);
+    const target = uri && counterpart(uri);
+    if (!uri || !target || uri.scheme !== "file") return undefined;
+    await ready;
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const file = path.basename(target.path);
+    try {
+      await vscode.workspace.fs.stat(target);
+      const choice = await vscode.window.showWarningMessage(`${file} exists. Replace it with ${path.basename(uri.path)}?`, { modal: true }, "Replace");
+      if (choice !== "Replace") return undefined;
+    } catch {
+      // It does not exist yet.
+    }
+    try {
+      const { text } = await engine.exportDocument(documentName(doc.uri), target.fsPath);
+      await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(text));
+      await pairs.sync(doc);
+      void vscode.window.showInformationMessage(`Wrote ${file}; it is kept equivalent to ${path.basename(uri.path)}.`, "Open").then((choice) => {
+        if (choice) void vscode.commands.executeCommand("vscode.open", target);
+      });
+      return target;
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not write ${file}: ${errorMessage(e)}`);
+      return undefined;
+    }
+  });
+
+  // ---------------------------------------------------------------- transformations
+
+  const openTransformation = (document: string, model: string, tab: "steps" | "space" = "steps") =>
+    TransformationPanel.open(engine, context.extensionUri, document, model, tab);
+  /** Opens the transformation view for a Henshin document (default: the active one, else
+   * one to pick), on a model to pick. */
+  const transform = async (tab: "steps" | "space", uri?: vscode.Uri, model?: string) => {
+    await ready;
+    uri ??= await chooseTransformation();
+    if (!uri) return;
+    // Opening the document hands it to the language server (if it is not in a workspace folder).
+    const doc = await vscode.workspace.openTextDocument(uri);
+    model ??= await chooseModel(await engine.models().catch(() => []));
+    if (!model) return;
+    try {
+      return await openTransformation(documentName(doc.uri), model, tab);
+    } catch (e) {
+      void vscode.window.showErrorMessage(errorMessage(e));
+      return undefined;
+    }
+  };
+  register("oxychloride.openTransformation", (uri?: vscode.Uri) => transform("steps", uri instanceof vscode.Uri ? uri : undefined));
+  register("oxychloride.exploreStateSpace", (uri?: vscode.Uri) => transform("space", uri instanceof vscode.Uri ? uri : undefined));
+  register("oxychloride.transformModel", (node?: ModelNode) =>
+    transform("steps", undefined, node?.kind === "resource" ? node.resource.uri : undefined),
+  );
+
   register("oxychloride.restartServer", async () => {
     await client?.stop().catch(() => undefined);
     client = undefined;
     await startClient().catch((e) => vscode.window.showErrorMessage(errorMessage(e)));
   });
 
-  return { engine, console: oclConsole, creator, metamodels, models, validation, ready };
+  return {
+    engine,
+    console: oclConsole,
+    creator,
+    codeGenerator,
+    metamodels,
+    models,
+    validation,
+    diagrams: () => MetamodelDiagramEditor.all(),
+    ruleDiagrams: () => RuleDiagramEditor.all(),
+    pairs,
+    openTransformation,
+    ready,
+  };
 }
 
 export async function deactivate(): Promise<void> {

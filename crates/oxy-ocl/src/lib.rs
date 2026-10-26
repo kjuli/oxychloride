@@ -11,12 +11,14 @@ mod check;
 pub mod env;
 pub mod eval;
 pub mod oclinecore;
+pub mod resolution;
 pub mod types;
 pub mod validate;
 pub mod value;
 
 pub use env::{Environment, EnvironmentBuilder, Invariant, Source, SourceId, SourceKind, SourcedDiagnostic};
 pub use eval::{ContractCheck, Evaluator};
+pub use resolution::{Analysis, Resolution};
 pub use types::Type;
 pub use validate::{ConstraintResult, Status, UncheckedOperation, Validation, validate, validate_model};
 pub use value::Value;

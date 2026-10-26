@@ -7,6 +7,7 @@
 
 use super::Parser;
 use crate::diagnostic::Diagnostic;
+use crate::span::Span;
 use crate::syntax::ast::*;
 use crate::syntax::lexer::TokenKind;
 
@@ -161,11 +162,13 @@ impl Parser {
             packages: Vec::new(),
             classifiers: Vec::new(),
             span: start,
+            body: None,
         };
         if self.eat(&TokenKind::Semi) {
             pkg.span = start.to(self.prev_span());
             return pkg;
         }
+        let open = self.span();
         if !self.expect(&TokenKind::LBrace, "to start the package") {
             self.skip_statement();
             pkg.span = start.to(self.prev_span());
@@ -173,6 +176,7 @@ impl Parser {
         }
         loop {
             if self.eat(&TokenKind::RBrace) {
+                pkg.body = Some(open.to(self.prev_span()));
                 break;
             }
             if self.at_eof() {
@@ -220,6 +224,16 @@ impl Parser {
         }
     }
 
+    /// An optional qualifier list and the span of its braces.
+    fn qualifier_list(&mut self, allowed: &[&str]) -> (Vec<Qualifier>, Option<Span>) {
+        if !self.at_qualifier_braces(allowed) {
+            return (Vec::new(), None);
+        }
+        let open = self.span();
+        let list = self.qualifiers();
+        (list, Some(open.to(self.prev_span())))
+    }
+
     fn qualifiers(&mut self) -> Vec<Qualifier> {
         let mut out = Vec::new();
         self.bump(); // '{'
@@ -263,6 +277,7 @@ impl Parser {
             self.bump();
         }
         let keyword = self.bump();
+        let keyword_span = keyword.span;
         let word = match &keyword.kind {
             TokenKind::Ident(w) => w.clone(),
             other => {
@@ -283,14 +298,16 @@ impl Parser {
         }
         let is_class = word == "class" || word == "interface";
         let mut supers = Vec::new();
+        let mut extends = None;
         if is_class && self.at_word("extends") {
-            self.bump();
+            let extends_start = self.bump().span;
             loop {
                 supers.push(self.type_ref());
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
             }
+            extends = Some(extends_start.to(self.prev_span()));
         }
         let instance_class = if self.eat(&TokenKind::Colon) {
             match self.peek().clone() {
@@ -307,8 +324,12 @@ impl Parser {
         } else {
             None
         };
+        let mut qualifiers = None;
         if self.at_qualifier_braces(&["interface", "serializable"]) {
-            for q in self.qualifiers() {
+            let open = self.span();
+            let list = self.qualifiers();
+            qualifiers = Some(open.to(self.prev_span()));
+            for q in list {
                 if q.name == "interface" && is_class {
                     is_interface = !q.negated;
                 } else if q.name != "serializable" {
@@ -321,10 +342,13 @@ impl Parser {
         let mut operations = Vec::new();
         let mut invariants = Vec::new();
         let mut literals = Vec::new();
+        let mut body = None;
         if !self.eat(&TokenKind::Semi) {
+            let open = self.span();
             if self.expect(&TokenKind::LBrace, &format!("to start the body of '{name}'")) {
                 loop {
                     if self.eat(&TokenKind::RBrace) {
+                        body = Some(open.to(self.prev_span()));
                         break;
                     }
                     if self.at_eof() {
@@ -379,7 +403,17 @@ impl Parser {
                 ClassifierDefKind::DataType
             }
         };
-        ClassifierDef { name, instance_class, annotations, kind, span: start.to(self.prev_span()) }
+        ClassifierDef {
+            name,
+            instance_class,
+            annotations,
+            kind,
+            span: start.to(self.prev_span()),
+            keyword: keyword_span,
+            extends,
+            qualifiers,
+            body,
+        }
     }
 
     /// `static`/`definition` modifiers followed by `attribute` or `property`.
@@ -590,13 +624,15 @@ impl Parser {
         } else {
             None
         };
-        let qualifiers = if self.at_qualifier_braces(FEATURE_QUALIFIERS) { self.qualifiers() } else { Vec::new() };
+        let (qualifiers, qualifier_span) = self.qualifier_list(FEATURE_QUALIFIERS);
         let mut constraints = Vec::new();
         let mut annotations = Vec::new();
+        let mut body = None;
         if self.at(&TokenKind::LBrace) {
-            self.bump();
+            let open = self.bump().span;
             loop {
                 if self.eat(&TokenKind::RBrace) {
+                    body = Some(open.to(self.prev_span()));
                     break;
                 }
                 if self.at_eof() {
@@ -634,6 +670,8 @@ impl Parser {
             constraints,
             annotations,
             span: start.to(self.prev_span()),
+            qualifier_span,
+            body,
         }
     }
 
@@ -643,6 +681,7 @@ impl Parser {
         self.bump(); // 'operation'
         let name = self.ident("an operation name");
         let mut params = Vec::new();
+        let params_start = self.span();
         if self.expect(&TokenKind::LParen, "to start the parameter list") {
             if !self.at(&TokenKind::RParen) {
                 loop {
@@ -673,6 +712,7 @@ impl Parser {
             }
             self.expect(&TokenKind::RParen, "to close the parameter list");
         }
+        let params_span = params_start.to(self.prev_span());
         let (ty, multiplicity) = if self.eat(&TokenKind::Colon) {
             let t = self.type_ref();
             (Some(t), self.multiplicity())
@@ -689,13 +729,15 @@ impl Parser {
                 }
             }
         }
-        let qualifiers = if self.at_qualifier_braces(OPERATION_QUALIFIERS) { self.qualifiers() } else { Vec::new() };
+        let (qualifiers, qualifier_span) = self.qualifier_list(OPERATION_QUALIFIERS);
         let mut constraints = Vec::new();
         let mut annotations = Vec::new();
+        let mut body = None;
         if self.at(&TokenKind::LBrace) {
-            self.bump();
+            let open = self.bump().span;
             loop {
                 if self.eat(&TokenKind::RBrace) {
+                    body = Some(open.to(self.prev_span()));
                     break;
                 }
                 if self.at_eof() {
@@ -725,6 +767,7 @@ impl Parser {
         OperationDef {
             name,
             params,
+            params_span,
             ty,
             multiplicity,
             throws,
@@ -732,6 +775,8 @@ impl Parser {
             constraints,
             annotations,
             span: start.to(self.prev_span()),
+            qualifier_span,
+            body,
         }
     }
 
@@ -920,6 +965,28 @@ mod tests {
         );
         assert_eq!(literals[1].value, Some(3));
         assert_eq!(literals[2].literal.as_deref(), Some("history"));
+    }
+
+    #[test]
+    fn records_the_spans_of_bodies_and_clauses() {
+        let src = "package p : p = 'u' {\n  abstract class A extends B, C { interface } {\n    property x : B[*] { composes } { derivation: null; }\n    operation f(a : B) : B { ordered };\n  }\n  class B;\n}";
+        let (doc, diags) = parse_ecore_document(src);
+        assert!(diags.is_empty(), "{diags:?}");
+        let slice = |s: Span| &src[s.range()];
+        let pkg = &doc.packages[0];
+        assert!(slice(pkg.body.unwrap()).starts_with("{\n  abstract") && slice(pkg.body.unwrap()).ends_with('}'));
+        let a = &pkg.classifiers[0];
+        assert_eq!(slice(a.keyword), "class");
+        assert_eq!(slice(a.extends.unwrap()), "extends B, C");
+        assert_eq!(slice(a.qualifiers.unwrap()), "{ interface }");
+        assert!(slice(a.body.unwrap()).starts_with("{\n    property"));
+        let ClassifierDefKind::Class { features, operations, .. } = &a.kind else { panic!() };
+        assert_eq!(slice(features[0].qualifier_span.unwrap()), "{ composes }");
+        assert_eq!(slice(features[0].body.unwrap()), "{ derivation: null; }");
+        assert_eq!(slice(operations[0].params_span), "(a : B)");
+        assert_eq!(slice(operations[0].qualifier_span.unwrap()), "{ ordered }");
+        assert!(operations[0].body.is_none());
+        assert!(pkg.classifiers[1].body.is_none());
     }
 
     #[test]

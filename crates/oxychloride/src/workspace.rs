@@ -100,13 +100,13 @@ impl Default for ValidateOptions {
 /// A set of metamodels, instance models and documents (Complete OCL, OCLinEcore, HUTN).
 ///
 /// This is the main entry point of the engine for Rust callers; the JSON-RPC server, the C
-/// ABI and the desktop app are thin layers on top of it.
+/// ABI and the language server are thin layers on top of it.
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
     /// Metamodels loaded from `.ecore` files.
     base_mm: Metamodel,
     /// `base_mm` plus the packages of the OCLinEcore documents.
-    mm: Metamodel,
+    pub(crate) mm: Metamodel,
     /// Models loaded from XMI files.
     xmi_model: Model,
     /// `xmi_model` plus the objects of the model documents.
@@ -126,6 +126,10 @@ pub struct Workspace {
     model_problems: Vec<Diagnostic>,
     /// URI prefix mappings, e.g. `pathmap://PCM_MODELS/` → a local directory.
     uri_mappings: Vec<(String, String)>,
+    /// Changes whenever `mm` is rebuilt or grows (transformation sessions refer to it).
+    pub(crate) generation: u64,
+    /// Transformation sessions (see `transform.rs`).
+    pub(crate) transformations: crate::transform::Sessions,
     /// `mm` must be rebuilt from `base_mm` and the OCLinEcore documents.
     mm_dirty: bool,
     /// The XMI models must be reloaded (the metamodel changed underneath them).
@@ -293,6 +297,7 @@ impl Workspace {
         }
         self.mm = mm;
         self.oclinecore = built;
+        self.generation += 1;
     }
 
     /// OCLinEcore documents, each after the documents it imports.
@@ -341,7 +346,7 @@ impl Workspace {
             let load = match doc.language {
                 Language::Hutn => hutn::load(&doc.text, name, &self.mm, &mut model),
                 Language::Xmi => load_xmi_document(&doc.text, name, &self.mm, &mut model),
-                Language::Ocl | Language::OclInEcore => continue,
+                Language::Ocl | Language::OclInEcore | Language::Henshin | Language::HenshinModel => continue,
             };
             for o in &load.objects {
                 locations.insert(o.object, (name.clone(), o.span.clone()));
@@ -372,6 +377,7 @@ impl Workspace {
         // conflict with an OCLinEcore document is reported for the document once `mm` is
         // rebuilt.
         let _ = self.mm.load_ecore_file(&uri);
+        self.generation += 1;
         self.metamodel_grew();
         Ok(self.ecore_load_result(&load))
     }
@@ -388,6 +394,7 @@ impl Workspace {
         let load = self.base_mm.load_ecore_str(text, uri)?;
         self.ecore_inputs.push(Input::Text { uri: uri.to_string(), text: text.to_string() });
         let _ = self.mm.load_ecore_str(text, uri);
+        self.generation += 1;
         self.metamodel_grew();
         Ok(self.ecore_load_result(&load))
     }
@@ -543,7 +550,7 @@ impl Workspace {
             match l {
                 Language::OclInEcore => self.mm_dirty = true,
                 Language::Hutn | Language::Xmi => self.models_dirty = true,
-                Language::Ocl => {}
+                Language::Ocl | Language::Henshin | Language::HenshinModel => {}
             }
         }
     }
@@ -582,7 +589,11 @@ impl Workspace {
                 let (parsed, _) = parse_ecore_document(&text);
                 self.resolve_imports(name, &parsed.imports)
             }
-            Language::Hutn => (Vec::new(), Vec::new()),
+            Language::Hutn | Language::Henshin => (Vec::new(), Vec::new()),
+            Language::HenshinModel => {
+                self.load_henshin_imports(name, &text);
+                (Vec::new(), Vec::new())
+            }
             Language::Xmi => {
                 self.load_schema_locations(name, &text);
                 (Vec::new(), Vec::new())
@@ -723,6 +734,8 @@ impl Workspace {
             }
             if doc.language.is_model() {
                 out.extend(self.model_document_diagnostics(name, &compiled));
+            } else if doc.language.is_transformation() {
+                out.extend(self.henshin_diagnostics(name));
             } else if let Some(src) = compiled.source_of(name) {
                 let source = compiled.env.source(src);
                 out.extend(doc.import_diagnostics.iter().map(|d| convert_diagnostic(source, d)));
@@ -1107,26 +1120,26 @@ impl Workspace {
     /// Finds an object by resource URI (default: first model resource) and fragment.
     pub fn resolve_object(&self, r: &ObjectRef) -> Result<ObjectId, Error> {
         let resource = match &r.resource {
-            Some(uri) => self
-                .model
-                .resource_of_uri(uri)
-                .or_else(|| {
-                    // Accept paths that canonicalize to a loaded resource, or bare file names.
-                    let canonical = oxy_ecore::ecore_loader::canonical_uri(Path::new(uri));
-                    self.model.resource_of_uri(&canonical).or_else(|| {
-                        self.model
-                            .resources()
-                            .iter()
-                            .position(|res| res.uri.rsplit(['/', '\\']).next() == Some(uri.as_str()))
-                    })
-                })
-                .ok_or_else(|| Error::NotFound(format!("no model resource '{uri}' is loaded")))?,
+            Some(uri) => self.resource_index(uri)?,
             None if self.model.resources().is_empty() => return Err(Error::NotFound("no model is loaded".into())),
             None => 0,
         };
         self.model
             .resolve_fragment(&self.mm, resource, &r.fragment)
             .ok_or_else(|| Error::NotFound(format!("no object at '{}'", r.fragment)))
+    }
+
+    /// A model resource by URI, a path that canonicalizes to it, or its file name.
+    pub(crate) fn resource_index(&self, uri: &str) -> Result<usize, Error> {
+        self.model
+            .resource_of_uri(uri)
+            .or_else(|| {
+                let canonical = oxy_ecore::ecore_loader::canonical_uri(Path::new(uri));
+                self.model.resource_of_uri(&canonical).or_else(|| {
+                    self.model.resources().iter().position(|res| res.uri.rsplit(['/', '\\']).next() == Some(uri))
+                })
+            })
+            .ok_or_else(|| Error::NotFound(format!("no model resource '{uri}' is loaded")))
     }
 
     /// The document and range defining an object of a HUTN document.
@@ -1149,7 +1162,8 @@ impl Workspace {
     // ------------------------------------------------------------------ conversion
 
     /// Exports a document in its interchange format: an OCLinEcore document as an `.ecore`
-    /// file, a HUTN document as an XMI file. `target` is the path the result will be written
+    /// file, a HUTN document as an XMI file, a Henshin text as a `.henshin` file (and a
+    /// `.henshin` file as a Henshin text). `target` is the path the result will be written
     /// to; it is used to make references to `.ecore` files relative.
     pub fn export_document(&self, name: &str, target: Option<&str>) -> Result<ExportResult, Error> {
         let doc =
@@ -1162,25 +1176,32 @@ impl Workspace {
             }
             Language::Hutn => {
                 let load = self.hutn.get(name).ok_or_else(|| Error::NotFound(format!("'{name}' is not loaded")))?;
-                let from = target.unwrap_or(name);
-                let mut locations = Vec::new();
-                for p in self.mm.package_ids() {
-                    let resource = &self.mm.resources()[self.mm.package(p).resource].uri;
-                    if resource.ends_with(".ecore") && Path::new(resource).is_absolute() {
-                        let relative = oxy_ecore::ecore_writer::relative_path(from, resource);
-                        locations.push((self.mm.package(p).ns_uri.clone(), relative));
-                    }
-                }
+                let locations = self.schema_locations(target.unwrap_or(name));
                 let text = oxy_ecore::xmi_writer::write_resource(&self.mm, &self.model, load.resource, &locations);
                 Ok(ExportResult { text, format: "xmi".into() })
             }
             Language::Ocl => Err(Error::Invalid("Complete OCL documents cannot be exported".into())),
+            Language::Henshin | Language::HenshinModel => self.convert_transformation(name, target),
             Language::Xmi => Err(Error::Invalid("XMI documents are XMI already".into())),
         }
     }
 
+    /// `xsi:schemaLocation`s of the `.ecore` files of the metamodels, relative to `from`.
+    pub(crate) fn schema_locations(&self, from: &str) -> Vec<(String, String)> {
+        let mut locations = Vec::new();
+        for p in self.mm.package_ids() {
+            let resource = &self.mm.resources()[self.mm.package(p).resource].uri;
+            if resource.ends_with(".ecore") && Path::new(resource).is_absolute() {
+                let relative = oxy_ecore::ecore_writer::relative_path(from, resource);
+                locations.push((self.mm.package(p).ns_uri.clone(), relative));
+            }
+        }
+        locations
+    }
+
     /// Converts a file to a textual document: an `.ecore` file to OCLinEcore, an XMI model
-    /// to HUTN. The workspace itself is not changed.
+    /// to HUTN, a `.henshin` file to Henshin's textual syntax (and a Henshin text to a
+    /// `.henshin` file). The workspace itself is not changed.
     pub fn convert_file(&self, path: &str, to: Language) -> Result<String, Error> {
         match to {
             Language::OclInEcore => {
@@ -1200,6 +1221,7 @@ impl Workspace {
                 let load = doc.load(&mm, &mut model)?;
                 Ok(hutn::write(&mm, &model, load.resource))
             }
+            Language::Henshin | Language::HenshinModel => self.convert_transformation_file(path, to),
             Language::Ocl | Language::Xmi => {
                 Err(Error::Invalid(format!("files cannot be converted to {}", to.extension())))
             }

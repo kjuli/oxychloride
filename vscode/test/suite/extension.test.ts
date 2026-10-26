@@ -1,5 +1,6 @@
 // Drives the extension in a real VS Code: live diagnostics for HUTN and XMI models, the views,
-// creating objects, the OCL console and validation.
+// creating objects, the OCL console, validation, metamodel diagrams, Henshin transformations and
+// their rule diagrams, and keeping a Henshin text and its `.henshin` file equivalent.
 
 import * as assert from "node:assert";
 import * as fs from "node:fs";
@@ -17,10 +18,36 @@ interface Api {
   creator: {
     createInstance(cls: unknown, inNew?: boolean): Promise<boolean>;
     addChild(node: unknown, choice?: { feature: string; cls: string }): Promise<boolean>;
+    instantiate(uri: vscode.Uri, position?: vscode.Position, target?: vscode.Uri): Promise<vscode.Uri | undefined>;
   };
   metamodels: { packages: { name: string; classifiers: { name: string; qualifiedName: string }[] }[] };
   models: { models: { uri: string; roots: { fragment: string; label: string; children: unknown[] }[] }[] };
   validation: { report?: { summary: { violated: number } } };
+  diagrams(): DiagramView[];
+  ruleDiagrams(): RuleDiagramView[];
+  pairs: { settled(): Promise<void> };
+}
+
+/** The parts of a rule diagram the tests use. */
+interface RuleDiagramView {
+  document: vscode.TextDocument;
+  panel: vscode.WebviewPanel;
+  current?: { syntax: string; rules: { id: string; nodes: { id: string; action: string }[] }[]; units: { id: string }[] };
+  edit(edit: object): Promise<{ element?: string }>;
+}
+
+/** The parts of a metamodel diagram the tests use. */
+interface DiagramView {
+  document: vscode.TextDocument;
+  panel: vscode.WebviewPanel;
+  current?: { syntax: string; classifiers: { id: string; name: string; references: { name: string; upper: number }[] }[] };
+  edit(edit: object): Promise<{ element?: string }>;
+}
+
+/** The parts of a transformation view the tests use. */
+interface TransformationView {
+  panel: vscode.WebviewPanel;
+  current?: { session: number; step: number; graph: { nodes: { id: number; label: string }[] }; violations: unknown[] };
 }
 
 const folder = () => vscode.workspace.workspaceFolders![0].uri.fsPath;
@@ -120,6 +147,85 @@ describe("Oxychloride", () => {
     assert.strictEqual(api.validation.report?.summary.violated, 5);
   });
 
+  it("checks, highlights and completes Henshin transformations", async () => {
+    const uri = vscode.Uri.file(path.join(folder(), "university/university.henshin_text"));
+    const editor = await vscode.window.showTextDocument(uri);
+    const doc = editor.document;
+    assert.strictEqual(doc.languageId, "henshin");
+    // Errors appear as the rules are edited.
+    const at = doc.getText().indexOf("create node enrolment:Enrolment");
+    const typo = doc.positionAt(at + "create node enrolment:".length);
+    await editor.edit((e) => e.insert(typo, "X"));
+    await waitFor("unknown class", () => errors(uri).some((d) => d.message.includes("unknown class 'XEnrolment'")));
+    await vscode.commands.executeCommand("undo");
+    await waitFor("no errors", () => errors(uri).length === 0 || undefined);
+    // Completion proposes the classes of the imported package, hovers describe names.
+    const completions = await vscode.commands.executeCommand<vscode.CompletionList>("vscode.executeCompletionItemProvider", uri, typo);
+    const labels = completions.items.map((i) => (typeof i.label === "string" ? i.label : i.label.label));
+    assert.ok(labels.includes("Enrolment") && labels.includes("Course"), labels.join(", "));
+    const hovers = await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, typo.translate(0, 2));
+    const text = hovers.flatMap((h) => h.contents.map((c) => (typeof c === "string" ? c : c.value))).join("\n");
+    assert.ok(text.includes("class university::Enrolment"), text);
+  });
+
+  it("transforms a model step by step and explores its state space", async () => {
+    const uri = vscode.Uri.file(path.join(folder(), "university/university.henshin_text"));
+    const view = await vscode.commands.executeCommand<TransformationView | undefined>("oxychloride.openTransformation", uri);
+    assert.ok(view, "the transformation view");
+    const state = await waitFor("the initial state", () => view.current);
+    assert.strictEqual(state.step, 0);
+    assert.strictEqual(state.graph.nodes.length, 16);
+    assert.strictEqual(state.violations.length, 3);
+    const document = uri.fsPath;
+    const result = await api.engine.call<{ applied: boolean; state: { step: number; changes: { createdNodes: number[] } } }>(
+      "applyTransformation",
+      { session: state.session, document, unit: "enrol" },
+    );
+    assert.ok(result.applied);
+    assert.strictEqual(result.state.changes.createdNodes.length, 1);
+    const space = await api.engine.call<{ states: unknown[]; complete: boolean }>("exploreStateSpace", {
+      session: state.session,
+      document,
+      rules: ["enrol"],
+      step: 0,
+    });
+    assert.strictEqual(space.states.length, 16);
+    assert.ok(space.complete);
+    view.panel.dispose();
+  });
+
+  it("instantiates metamodels as XMI models", async () => {
+    // The class at the cursor of an OCLinEcore document.
+    const metamodel = await vscode.workspace.openTextDocument(path.join(folder(), "university/university.oclinecore"));
+    const inStudent = metamodel.positionAt(metamodel.getText().indexOf("attribute semester"));
+    const student = vscode.Uri.file(path.join(folder(), "university/Student.xmi"));
+    assert.strictEqual((await api.creator.instantiate(metamodel.uri, inStudent, student))?.fsPath, student.fsPath);
+    const text = fs.readFileSync(student.fsPath, "utf8");
+    assert.ok(text.includes('<uni:Student xmi:version="2.0"'), text);
+    assert.ok(text.includes('xmlns:uni="http://www.example.org/university/1.0">'), text);
+    assert.strictEqual(vscode.window.activeTextEditor?.document.uri.fsPath, student.fsPath);
+    const models = () => api.models.models.find((m) => m.uri.endsWith("Student.xmi"));
+    await waitFor("the new model", () => models()?.roots[0]?.label.startsWith("Student"));
+    await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+
+    // An .ecore file: the user picks a class, the model roots (no containment holds) first.
+    const ecore = vscode.Uri.file(path.join(folder(), "library/library.ecore"));
+    const target = vscode.Uri.file(path.join(folder(), "library/Library.xmi"));
+    const result: { done: boolean; uri?: vscode.Uri } = { done: false };
+    void api.creator.instantiate(ecore, undefined, target).then((uri) => Object.assign(result, { done: true, uri }));
+    // Accepts the first class once the picker shows.
+    for (const start = Date.now(); !result.done; ) {
+      if (Date.now() - start > 30000) throw new Error("timed out waiting for the class picker");
+      await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.strictEqual(result.uri?.fsPath, target.fsPath);
+    const library = fs.readFileSync(target.fsPath, "utf8");
+    assert.ok(library.includes("<library:Library "), library);
+    assert.ok(library.includes('xsi:schemaLocation="http://www.example.org/library/1.0 library.ecore"'), library);
+    await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+  });
+
   it("checks XMI models live", async () => {
     const file = path.join(folder(), "university/tum.xmi");
     fs.writeFileSync(
@@ -210,10 +316,128 @@ describe("Oxychloride", () => {
     }
   });
 
+  it("generates Python and Rust code from metamodels", async () => {
+    type Generated = { target: string; packages: string[]; files: { path: string }[]; problems: unknown[] };
+    const out = vscode.Uri.file(path.join(folder(), "generated"));
+    // An OCLinEcore metamodel, as Python.
+    const university = vscode.Uri.file(path.join(folder(), "university/university.oclinecore"));
+    const python = await vscode.commands.executeCommand<Generated>("oxychloride.generateCode", university, { target: "python", outputFolder: out });
+    assert.deepStrictEqual(python?.packages, ["university"]);
+    assert.deepStrictEqual(python.problems, []);
+    const model = fs.readFileSync(path.join(out.fsPath, "university/_model.py"), "utf8");
+    assert.ok(model.includes("class Course(_rt.EObject):") && model.includes("def _post_has_seat("), model.slice(0, 2000));
+    // An .ecore file, with the Complete OCL document next to it, as a Rust crate.
+    const library = vscode.Uri.file(path.join(folder(), "library/library.ecore"));
+    const rust = await vscode.commands.executeCommand<Generated>("oxychloride.generateCode", library, { target: "rust", outputFolder: out, name: "lib_model" });
+    assert.ok(rust?.files.some((f) => f.path === "lib_model/src/library.rs"), JSON.stringify(rust?.files.map((f) => f.path)));
+    const code = fs.readFileSync(path.join(out.fsPath, "lib_model/src/library.rs"), "utf8");
+    // The invariant of library.ocl (a document of the workspace) is part of it.
+    assert.ok(code.includes("pub fn check_has_isbn(self, m: &crate::Model)"), code.slice(0, 2000));
+  });
+
+  it("draws an OCLinEcore metamodel as a diagram that edits the same document", async () => {
+    const uri = vscode.Uri.file(path.join(folder(), "university/university.oclinecore"));
+    const editor = await vscode.window.showTextDocument(uri);
+    await vscode.commands.executeCommand("oxychloride.openDiagram", uri);
+    const view = await waitFor("the diagram", () => api.diagrams().find((v) => v.document.uri.fsPath === uri.fsPath && v.current));
+    // The text editor and the diagram share the document.
+    assert.strictEqual(view.document, editor.document);
+    assert.deepStrictEqual(
+      view.current!.classifiers.map((c) => c.name),
+      ["University", "Kind", "Course", "Student", "Enrolment"],
+    );
+    // An edit in the diagram is an edit of the text…
+    const result = await view.edit({ kind: "addClassifier", package: "university", classifier: "class", name: "Room" });
+    assert.strictEqual(result.element, "university::Room");
+    assert.ok(editor.document.getText().includes("\n  class Room;\n}"), editor.document.getText());
+    assert.ok(editor.document.isDirty);
+    await waitFor("Room in the diagram", () => view.current!.classifiers.some((c) => c.name === "Room"));
+    // …and an edit of the text changes the diagram.
+    const text = editor.document.getText();
+    const at = editor.document.positionAt(text.indexOf("class Enrolment") + "class ".length);
+    await editor.edit((e) => e.replace(new vscode.Range(at, at.translate(0, "Enrolment".length)), "Registration"));
+    await waitFor("Registration in the diagram", () => view.current!.classifiers.some((c) => c.name === "Registration"));
+    // Undo in the diagram undoes in the document.
+    view.panel.reveal();
+    await waitFor("the diagram to be active", () => view.panel.active);
+    await vscode.commands.executeCommand("undo");
+    await waitFor("the rename undone", () => !editor.document.getText().includes("Registration"));
+    await vscode.commands.executeCommand("undo");
+    await waitFor("Room undone", () => !editor.document.getText().includes("class Room"));
+    await waitFor("Room gone from the diagram", () => !view.current!.classifiers.some((c) => c.name === "Room"));
+    assert.ok(!editor.document.isDirty);
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
+  it("draws and edits .ecore files", async () => {
+    const uri = vscode.Uri.file(path.join(folder(), "library/library.ecore"));
+    await vscode.commands.executeCommand("oxychloride.openDiagram", uri, false);
+    const view = await waitFor("the diagram", () => api.diagrams().find((v) => v.document.uri.fsPath === uri.fsPath && v.current));
+    assert.strictEqual(view.current!.syntax, "ecore");
+    await view.edit({ kind: "update", element: "library::Loan.book", properties: { upper: -1 } });
+    assert.ok(view.document.getText().includes('name="book" lowerBound="1" upperBound="-1" eType="#//Book"'), view.document.getText());
+    await waitFor("the new multiplicity", () =>
+      view.current!.classifiers.find((c) => c.name === "Loan")?.references.some((r) => r.name === "book" && r.upper === -1),
+    );
+    await vscode.commands.executeCommand("workbench.action.files.revert");
+    assert.ok(!view.document.isDirty);
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
+  it("draws Henshin rules as diagrams that edit the text, and keeps the .henshin file equivalent", async () => {
+    const uri = vscode.Uri.file(path.join(folder(), "university/university.henshin_text"));
+    const model = vscode.Uri.file(path.join(folder(), "university/university.henshin"));
+    const editor = await vscode.window.showTextDocument(uri);
+    await vscode.commands.executeCommand("oxychloride.openRuleDiagram", uri);
+    const view = await waitFor("the rule diagram", () => api.ruleDiagrams().find((v) => v.document.uri.fsPath === uri.fsPath && v.current));
+    assert.strictEqual(view.document, editor.document);
+    assert.strictEqual(view.current!.syntax, "text");
+    assert.deepStrictEqual(
+      view.current!.rules.map((r) => r.id),
+      ["enrol", "drop", "grade", "createSeminar", "addSeats", "closeCourse"],
+    );
+    const enrol = view.current!.rules[0];
+    assert.strictEqual(enrol.nodes.find((n) => n.id === "enrol::existing")?.action, "forbid");
+    // An edit in the diagram is an edit of the text …
+    const result = await view.edit({ kind: "addNode", scope: "drop", name: "campus", class: "University", action: "create" });
+    assert.strictEqual(result.element, "drop::campus");
+    assert.ok(editor.document.getText().includes("\t\tcreate node campus:University\n"), editor.document.getText());
+    await waitFor("campus in the diagram", () => view.current!.rules[1].nodes.some((n) => n.id === "drop::campus"));
+    // … and of the .henshin file next to it.
+    await api.pairs.settled();
+    const henshin = () => vscode.workspace.textDocuments.find((d) => d.uri.fsPath === model.fsPath)?.getText() ?? fs.readFileSync(model.fsPath, "utf8");
+    await waitFor("campus in university.henshin", () => henshin().includes('name="campus"'));
+    // Saving the text saves the model too.
+    await editor.document.save();
+    await waitFor("university.henshin saved", () => fs.readFileSync(model.fsPath, "utf8").includes('name="campus"'));
+    // A change of the model changes the text.
+    const modelDoc = await vscode.workspace.openTextDocument(model);
+    const modelEditor = await vscode.window.showTextDocument(modelDoc, vscode.ViewColumn.Beside);
+    const at = modelDoc.getText().indexOf('name="campus"') + 'name="'.length;
+    await modelEditor.edit((e) => e.replace(new vscode.Range(modelDoc.positionAt(at), modelDoc.positionAt(at + "campus".length)), "site"));
+    await waitFor("site in the text", () => editor.document.getText().includes("create node site:University"));
+    await api.pairs.settled();
+    assert.ok(!editor.document.getText().includes("campus"), editor.document.getText());
+    await vscode.commands.executeCommand("workbench.action.files.saveAll");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
+  it("opens .henshin files as rule diagrams", async () => {
+    const uri = vscode.Uri.file(path.join(folder(), "university/university.henshin"));
+    await vscode.commands.executeCommand("vscode.open", uri);
+    const view = await waitFor("the rule diagram", () => api.ruleDiagrams().find((v) => v.document.uri.fsPath === uri.fsPath && v.current));
+    assert.strictEqual(view.current!.syntax, "model");
+    assert.ok(view.current!.rules.some((r) => r.id === "closeCourse"));
+    await view.edit({ kind: "setRuleOptions", element: "enrol", injectiveMatching: false });
+    assert.ok(view.document.getText().includes('name="enrol" injectiveMatching="false"'), view.document.getText().slice(0, 2000));
+    await vscode.commands.executeCommand("workbench.action.files.revert");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
   it("has icons for its languages", () => {
     const ext = vscode.extensions.getExtension("palladio.oxychloride")!;
     const languages: { id: string; icon?: { light: string; dark: string } }[] = ext.packageJSON.contributes.languages;
-    for (const id of ["ocl", "oclinecore", "hutn"]) {
+    for (const id of ["ocl", "oclinecore", "hutn", "henshin"]) {
       const icon = languages.find((l) => l.id === id)?.icon;
       assert.ok(icon, `no icon for ${id}`);
       for (const file of [icon.light, icon.dark]) {

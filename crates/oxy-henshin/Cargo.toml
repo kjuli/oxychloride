@@ -1,0 +1,9 @@
+[package]
+name = "oxy-henshin"
+description = "Henshin graph transformations (textual syntax) over Ecore models: rules, units, state space exploration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-ecore.workspace = true

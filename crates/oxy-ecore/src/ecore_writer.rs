@@ -234,56 +234,65 @@ impl Writer<'_> {
         out.push_str("</eOperations>\n");
     }
 
-    /// An `eType` value: cross-document references carry a type hint, as EMF writes them.
     fn type_href(&self, t: ClassifierId) -> String {
-        let href = self.href(ElementRef::Classifier(t));
-        if href.starts_with('#') {
-            return href;
-        }
-        let hint = match self.mm.classifier(t).kind {
-            ClassifierKind::Class(_) => "ecore:EClass",
-            ClassifierKind::DataType(_) => "ecore:EDataType",
-            ClassifierKind::Enum(_) => "ecore:EEnum",
-        };
-        format!("{hint} {href}")
+        type_href(self.mm, self.resource, t)
     }
 
-    /// A reference to a classifier or feature: `#//Class/feature` within this resource.
     fn href(&self, target: ElementRef) -> String {
-        let mm = self.mm;
-        let (package, mut path) = match target {
-            ElementRef::Classifier(c) => (mm.classifier(c).package, vec![mm.classifier(c).name.clone()]),
-            ElementRef::Feature(f) => {
-                let feature = mm.feature(f);
-                let owner = mm.classifier(feature.owner);
-                (owner.package, vec![owner.name.clone(), feature.name.clone()])
-            }
-            ElementRef::Operation(o) => {
-                let op = mm.operation(o);
-                let owner = mm.classifier(op.owner);
-                (owner.package, vec![owner.name.clone(), op.name.clone()])
-            }
-            ElementRef::Package(p) => (p, Vec::new()),
-        };
-        let mut root = package;
-        while let Some(parent) = mm.package(root).super_package {
-            path.insert(0, mm.package(root).name.clone());
-            root = parent;
-        }
-        let resource = mm.package(root).resource;
-        let index = mm.resources()[resource].roots.iter().position(|r| *r == root).unwrap_or(0);
-        let fragment = format!("/{}/{}", if index == 0 { String::new() } else { index.to_string() }, path.join("/"));
-        if resource == self.resource {
-            return format!("#{fragment}");
-        }
-        let ns_uri = &mm.package(root).ns_uri;
-        let target_uri = &mm.resources()[resource].uri;
-        let own_uri = &mm.resources()[self.resource].uri;
-        if is_ecore_file(target_uri) && is_file(own_uri) && ns_uri != ECORE_NS_URI {
-            return format!("{}#{fragment}", relative_path(own_uri, target_uri));
-        }
-        format!("{ns_uri}#{fragment}")
+        href(self.mm, self.resource, target)
     }
+}
+
+/// An `eType` value in `resource`: cross-document references carry a type hint, as EMF writes
+/// them (`ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString`).
+pub fn type_href(mm: &Metamodel, resource: usize, t: ClassifierId) -> String {
+    let href = href(mm, resource, ElementRef::Classifier(t));
+    if href.starts_with('#') {
+        return href;
+    }
+    let hint = match mm.classifier(t).kind {
+        ClassifierKind::Class(_) => "ecore:EClass",
+        ClassifierKind::DataType(_) => "ecore:EDataType",
+        ClassifierKind::Enum(_) => "ecore:EEnum",
+    };
+    format!("{hint} {href}")
+}
+
+/// A reference from `resource` to a classifier or feature: `#//Class/feature` within the
+/// resource, else a relative path or the package's nsURI before the `#`.
+pub fn href(mm: &Metamodel, resource: usize, target: ElementRef) -> String {
+    let (package, mut path) = match target {
+        ElementRef::Classifier(c) => (mm.classifier(c).package, vec![mm.classifier(c).name.clone()]),
+        ElementRef::Feature(f) => {
+            let feature = mm.feature(f);
+            let owner = mm.classifier(feature.owner);
+            (owner.package, vec![owner.name.clone(), feature.name.clone()])
+        }
+        ElementRef::Operation(o) => {
+            let op = mm.operation(o);
+            let owner = mm.classifier(op.owner);
+            (owner.package, vec![owner.name.clone(), op.name.clone()])
+        }
+        ElementRef::Package(p) => (p, Vec::new()),
+    };
+    let mut root = package;
+    while let Some(parent) = mm.package(root).super_package {
+        path.insert(0, mm.package(root).name.clone());
+        root = parent;
+    }
+    let target_resource = mm.package(root).resource;
+    let index = mm.resources()[target_resource].roots.iter().position(|r| *r == root).unwrap_or(0);
+    let fragment = format!("/{}/{}", if index == 0 { String::new() } else { index.to_string() }, path.join("/"));
+    if target_resource == resource {
+        return format!("#{fragment}");
+    }
+    let ns_uri = &mm.package(root).ns_uri;
+    let target_uri = &mm.resources()[target_resource].uri;
+    let own_uri = &mm.resources()[resource].uri;
+    if is_ecore_file(target_uri) && is_file(own_uri) && ns_uri != ECORE_NS_URI {
+        return format!("{}#{fragment}", relative_path(own_uri, target_uri));
+    }
+    format!("{ns_uri}#{fragment}")
 }
 
 fn is_file(uri: &str) -> bool {

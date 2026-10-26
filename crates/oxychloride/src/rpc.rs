@@ -1,13 +1,16 @@
 //! A JSON-RPC 2.0 interface to a [`Workspace`].
 //!
 //! The same [`Server`] backs `oxy serve` (newline-delimited JSON over stdio), the C ABI
-//! and the desktop app, so every client sees the same methods. See `docs/PROTOCOL.md`.
+//! and the language server, so every client sees the same methods. See `docs/PROTOCOL.md`.
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value as Json, json};
 
-use crate::protocol::{Language, ObjectRef, Position};
+use std::collections::HashMap;
+
+use crate::protocol::{CodeRequest, Language, MetamodelEdit, ObjectRef, Position, TransformationEdit};
+use crate::transform::ExploreRequest;
 use crate::workspace::{Error, ValidateOptions, Workspace};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -30,11 +33,29 @@ pub const METHODS: &[&str] = &[
     "models",
     "hover",
     "complete",
+    "classAt",
     "exportDocument",
     "convertFile",
     "createObject",
     "containmentOptions",
     "schemas",
+    "transformationUnits",
+    "startTransformation",
+    "transformationState",
+    "findMatches",
+    "applyTransformation",
+    "exportTransformation",
+    "exploreStateSpace",
+    "stateSpaceState",
+    "adoptState",
+    "closeTransformation",
+    "codeTargets",
+    "generateCode",
+    "metamodelDiagram",
+    "editMetamodel",
+    "transformationDiagram",
+    "editTransformation",
+    "syncTransformation",
 ];
 
 pub mod codes {
@@ -96,6 +117,14 @@ struct DocumentParams {
     text: Option<String>,
     /// Defaults to the language of the name's extension.
     language: Option<Language>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditMetamodelParams {
+    name: String,
+    text: Option<String>,
+    edit: MetamodelEdit,
 }
 
 #[derive(Deserialize, Default)]
@@ -177,6 +206,103 @@ struct ObjectParams {
     object: ObjectRef,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartTransformationParams {
+    /// The model resource: URI, path, file name or document name.
+    model: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionParams {
+    session: u64,
+    step: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FindMatchesParams {
+    session: u64,
+    /// The Henshin document.
+    document: String,
+    text: Option<String>,
+    rule: String,
+    #[serde(default)]
+    parameters: serde_json::Map<String, Json>,
+    step: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyParams {
+    session: u64,
+    document: String,
+    text: Option<String>,
+    /// A rule or unit.
+    unit: String,
+    #[serde(default)]
+    parameters: serde_json::Map<String, Json>,
+    /// For rules: the index of a match of `findMatches` (default: the first match).
+    #[serde(rename = "match")]
+    match_index: Option<usize>,
+    step: Option<usize>,
+    /// Seeds the random choices of independent units.
+    seed: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportStateParams {
+    session: u64,
+    step: Option<usize>,
+    format: Language,
+    target: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExploreParams {
+    session: u64,
+    document: String,
+    text: Option<String>,
+    rules: Vec<String>,
+    /// Fixed parameter values by rule.
+    #[serde(default)]
+    parameters: HashMap<String, serde_json::Map<String, Json>>,
+    step: Option<usize>,
+    max_states: Option<usize>,
+    max_depth: Option<usize>,
+    validate: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StateParams {
+    session: u64,
+    state: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditTransformationParams {
+    name: String,
+    text: Option<String>,
+    edit: TransformationEdit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncTransformationParams {
+    /// The document whose meaning the other gets.
+    name: String,
+    text: Option<String>,
+    /// The document of the other syntax, and its current text.
+    target: String,
+    target_text: String,
+}
+
 /// Updates an open document whose text the client changed meanwhile.
 fn update_text(ws: &mut Workspace, name: &str, text: Option<&str>) -> Result<(), RpcError> {
     if let Some(text) = text
@@ -189,6 +315,16 @@ fn update_text(ws: &mut Workspace, name: &str, text: Option<&str>) -> Result<(),
         return Err(RpcError::new(codes::NOT_FOUND, format!("no open document named '{name}'")));
     }
     Ok(())
+}
+
+/// The text of a metamodel document: an `.ecore` file's text is passed on as is (it is not a
+/// workspace document), an OCLinEcore document is updated first.
+fn metamodel_text<'a>(ws: &mut Workspace, name: &str, text: Option<&'a str>) -> Result<Option<&'a str>, RpcError> {
+    if crate::diagram::is_ecore(name) {
+        return Ok(text);
+    }
+    update_text(ws, name, text)?;
+    Ok(None)
 }
 
 fn params<T: DeserializeOwned>(p: Json) -> Result<T, RpcError> {
@@ -289,13 +425,13 @@ impl Server {
             }
             "packages" => to_json(ws.packages()),
             "models" => to_json(ws.models()),
-            "hover" | "complete" => {
+            "hover" | "complete" | "classAt" => {
                 let p: PositionParams = params(p)?;
                 update_text(ws, &p.name, p.text.as_deref())?;
-                if method == "hover" {
-                    to_json(ws.hover(&p.name, p.position))
-                } else {
-                    to_json(ws.complete(&p.name, p.position))
+                match method {
+                    "hover" => to_json(ws.hover(&p.name, p.position)),
+                    "complete" => to_json(ws.complete(&p.name, p.position)),
+                    _ => to_json(ws.class_at(&p.name, p.position)),
                 }
             }
             "exportDocument" => {
@@ -317,6 +453,99 @@ impl Server {
                 to_json(ws.containment_options(&p.object)?)
             }
             "schemas" => to_json(ws.schemas()),
+            "transformationUnits" => {
+                let p: DocumentParams = params(p)?;
+                update_text(ws, &p.name, p.text.as_deref())?;
+                to_json(ws.transformation_units(&p.name)?)
+            }
+            "startTransformation" => {
+                let p: StartTransformationParams = params(p)?;
+                to_json(ws.start_transformation(&p.model)?)
+            }
+            "transformationState" => {
+                let p: SessionParams = params(p)?;
+                to_json(ws.transformation_state(p.session, p.step)?)
+            }
+            "findMatches" => {
+                let p: FindMatchesParams = params(p)?;
+                update_text(ws, &p.document, p.text.as_deref())?;
+                let limit = p.limit.unwrap_or(100);
+                to_json(ws.find_matches(p.session, &p.document, &p.rule, &p.parameters, p.step, limit)?)
+            }
+            "applyTransformation" => {
+                let p: ApplyParams = params(p)?;
+                update_text(ws, &p.document, p.text.as_deref())?;
+                let seed = p.seed.unwrap_or(1);
+                to_json(ws.apply_transformation(
+                    p.session,
+                    &p.document,
+                    &p.unit,
+                    &p.parameters,
+                    p.match_index,
+                    p.step,
+                    seed,
+                )?)
+            }
+            "exportTransformation" => {
+                let p: ExportStateParams = params(p)?;
+                to_json(json!({ "text": ws.export_transformation(p.session, p.step, p.format, p.target.as_deref())? }))
+            }
+            "exploreStateSpace" => {
+                let p: ExploreParams = params(p)?;
+                update_text(ws, &p.document, p.text.as_deref())?;
+                let defaults = ExploreRequest::default();
+                let request = ExploreRequest {
+                    rules: p.rules,
+                    parameters: p.parameters,
+                    step: p.step,
+                    max_states: p.max_states.unwrap_or(defaults.max_states),
+                    max_depth: p.max_depth,
+                    validate: p.validate.unwrap_or(defaults.validate),
+                };
+                to_json(ws.explore_state_space(p.session, &p.document, &request)?)
+            }
+            "stateSpaceState" => {
+                let p: StateParams = params(p)?;
+                to_json(ws.state_space_state(p.session, p.state)?)
+            }
+            "adoptState" => {
+                let p: StateParams = params(p)?;
+                to_json(ws.adopt_state(p.session, p.state)?)
+            }
+            "closeTransformation" => {
+                let p: SessionParams = params(p)?;
+                to_json(json!({ "closed": ws.close_transformation(p.session) }))
+            }
+            "codeTargets" => to_json(crate::code_targets()),
+            "generateCode" => {
+                let p: CodeRequest = params(p)?;
+                to_json(ws.generate_code(&p)?)
+            }
+            "metamodelDiagram" => {
+                let p: DocumentParams = params(p)?;
+                let text = metamodel_text(ws, &p.name, p.text.as_deref())?;
+                to_json(ws.metamodel_diagram(&p.name, text)?)
+            }
+            "editMetamodel" => {
+                let p: EditMetamodelParams = params(p)?;
+                let text = metamodel_text(ws, &p.name, p.text.as_deref())?;
+                to_json(ws.edit_metamodel(&p.name, text, &p.edit)?)
+            }
+            "transformationDiagram" => {
+                let p: DocumentParams = params(p)?;
+                update_text(ws, &p.name, p.text.as_deref())?;
+                to_json(ws.transformation_diagram(&p.name)?)
+            }
+            "editTransformation" => {
+                let p: EditTransformationParams = params(p)?;
+                update_text(ws, &p.name, p.text.as_deref())?;
+                to_json(ws.edit_transformation(&p.name, &p.edit)?)
+            }
+            "syncTransformation" => {
+                let p: SyncTransformationParams = params(p)?;
+                update_text(ws, &p.name, p.text.as_deref())?;
+                to_json(json!({ "edits": ws.sync_transformation(&p.name, &p.target, &p.target_text)? }))
+            }
             other => Err(RpcError::new(codes::METHOD_NOT_FOUND, format!("unknown method '{other}'"))),
         }
     }
