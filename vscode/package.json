@@ -494,6 +494,12 @@
         "title": "Create Equivalent .henshin / Henshin Text",
         "category": "Oxychloride",
         "icon": "$(sync)"
+      },
+      {
+        "command": "oxychloride.newHenshinTransformation",
+        "title": "New Henshin Transformation…",
+        "category": "Oxychloride",
+        "icon": "$(new-file)"
       }
     ],
     "menus": {
@@ -578,6 +584,11 @@
           "command": "oxychloride.exportSchema",
           "when": "view == oxychloride.metamodels && viewItem == package",
           "group": "2_export@1"
+        },
+        {
+          "command": "oxychloride.newHenshinTransformation",
+          "when": "view == oxychloride.metamodels && viewItem == package",
+          "group": "1_create@2"
         },
         {
           "command": "oxychloride.addChild",
@@ -748,6 +759,11 @@
         {
           "command": "oxychloride.openTransformation",
           "when": "resourceExtname == .henshin_text || resourceExtname == .henshin",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.newHenshinTransformation",
+          "when": "resourceExtname =~ /^\\.(ecore|oclinecore|hutn|xmi)$/",
           "group": "7_modification"
         },
         {

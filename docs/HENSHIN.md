@@ -89,10 +89,13 @@ Units are frames too, with their control flow from the start to the end symbol: 
 - **Node** tool: click into a rule to add a node of the toolbar's class with the toolbar's action. **Edge** tool (or the connector on a node's right edge): drag from a node to another; the reference is the one that fits (a menu asks when several do).
 - The toolbar's **into** list chooses where new elements of a rule go: the rule, one of its multi-rules or condition graphs (also: **Add Elements Here** in their properties).
 - Double-click names and attributes to edit them (`name=value`), **+** on a node adds an attribute, Delete removes the selection.
+- With nothing focused, the properties panel lists the packages the transformation can import (its node classes come from them): checking one adds its `ePackageImport` (`<imports>` in a `.henshin` file).
 - The properties panel edits the rest: a rule's parameters (`IN name:Type, …`), options and attribute conditions, multi-rules; a node's class and action (changing it changes its edges and attributes so that they fit, e.g. the edges of a created node are created); an attribute's value, action and `set`; an edge's reference and action; a unit's parameters and body (in the textual syntax).
 - Renaming renames the references in the document: calls of a rule, a node's edges, `reuse`s and node parameter, a condition graph in its formula. Deleting a node deletes its edges, deleting a rule its calls.
 
 In a text, edits change as little text as possible: a new node is a line after the other nodes, a new edge goes into the last `edges [...]` list, a changed action is the keyword in place; layout and comments stay. A `.henshin` file is edited through its textual form: the edit is made on the text the file reads as, which is compiled and written back into the file (keeping its ids), and only the lines that changed are replaced. An edit that would make a `.henshin` file invalid (an unknown class, …) is refused, since such a file cannot be written.
+
+**New Henshin Transformation…** (context menu of `.ecore`, `.oclinecore`, `.hutn` and `.xmi` files in the Explorer, and of packages in the Metamodels view) writes a `.henshin` file (or a Henshin text) that imports the metamodel — of a model: the metamodel of its objects — and opens its rule diagram. An empty `.henshin` file (e.g. made with New File) is an empty module; when it is opened, its root element is written into it (if a Henshin text of the same name is next to it, what that text means, as they are a pair).
 
 Positions are kept in `<file>.diagram.json` next to the document (rule frames and units absolute, nodes relative to their rule), written when the user moves or lays out the diagram.
 

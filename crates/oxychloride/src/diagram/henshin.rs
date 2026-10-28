@@ -696,6 +696,7 @@ impl Workspace {
                 TransformationSyntax::Text
             },
             imports: syntax.document.imports.iter().map(print::import).collect(),
+            packages: importable_packages(mm),
             rules,
             units,
             classes: node_classes(mm, packages),
@@ -760,6 +761,18 @@ impl Workspace {
 
 /// The classes of the metamodel's user packages (the imported ones first), with their
 /// features.
+/// The names of the top-level packages, the user's first (Ecore's last), each once.
+fn importable_packages(mm: &Metamodel) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for p in mm.user_root_packages().chain([mm.ecore_package()]) {
+        let name = &mm.package(p).name;
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
 fn node_classes(mm: &Metamodel, packages: &[PackageId]) -> Vec<NodeClass> {
     let mut classes: Vec<ClassifierId> =
         mm.classifier_ids().filter(|c| mm.is_class(*c) && mm.classifier(*c).package != mm.ecore_package()).collect();

@@ -310,6 +310,7 @@ A Henshin document of either syntax as diagrams in Henshin's notation, and diagr
 ```ts
 type TransformationDiagram = {
   syntax: "text" | "model"; imports: string[];
+  packages: string[];       // the top-level packages that can be imported (the workspace's, then Ecore)
   rules: { id; name; parameters: {kind, name, type?}[]; checkDangling; injectiveMatching; conditions: string[]; javaImports: string[];
            multiRules: { id; name; kernel; checkDangling; injectiveMatching; conditions; range }[];
            formulas: { scope; formula; graphs: string[]; range }[];
@@ -324,11 +325,12 @@ type TransformationDiagram = {
   problems: DiagramProblem[];
 };
 ```
-`action` is `"preserve"`, `"create"`, `"delete"`, `"forbid"` or `"require"`. The elements of multi-rules and condition graphs are among their rule's nodes and edges, with `multi` (the multi-rule's id) or `condition` (the condition graph's id); a condition graph's elements have the action `forbid` if the graph is negated in a conjunction, else `require`. Values, conditions and classes are as written in the textual syntax; `text` is a unit's body in it. Ranges are in the document (for a model: its XML).
+`action` is `"preserve"`, `"create"`, `"delete"`, `"forbid"` or `"require"`. The elements of multi-rules and condition graphs are among their rule's nodes and edges, with `multi` (the multi-rule's id) or `condition` (the condition graph's id); a condition graph's elements have the action `forbid` if the graph is negated in a conjunction, else `require`. Values, conditions and classes are as written in the textual syntax; `text` is a unit's body in it. Ranges are in the document (for a model: its XML). An empty `.henshin` file is an empty module (no problems).
 
 ### `editTransformation` `{name, text?, edit}` → `{edits: [{range, text}], element?}`
 The text edits that make a diagram edit (the document is not changed). `edit` is one of (`kind`):
 
+- `setImports {imports: [string]}` (the packages after `ePackageImport`, replacing those there; the first go to the top of a text, after its leading comments);
 - `addRule {name}`, `addUnit {name}`; `rename {element, name}` (rules, units, multi-rules, condition graphs, nodes, with the references in the document: calls, edges, `reuse`s, formulas, node parameters); `delete {elements}` (rules and units with their calls, multi-rules, condition graphs, nodes with their edges, edges, attributes, elements of units);
 - `setParameters {element, parameters: [{kind, name, type?}]}`, `setRuleOptions {element, checkDangling?, injectiveMatching?}`, `setConditions {element, conditions: [string]}`, `addMultiRule {scope, name}`;
 - `addNode {scope, name, class, action}`, `updateNode {element, class?, action?}` (a new action changes the node's edges and attributes so that they fit);
@@ -336,7 +338,7 @@ The text edits that make a diagram edit (the document is not changed). `edit` is
 - `addAttribute {node, scope?, name, value, action?, set?}` (in `scope`, a multi-rule or condition graph, it is written with `reuse`), `updateAttribute {element, name?, value?, action?, set?}`;
 - `setUnitBody {element, body}` (the body in the textual syntax).
 
-`element` is the id of the added or renamed element. In a text, new elements are written as the printer writes them and changes are made in place. A `.henshin` model is edited through its textual form, compiled and written back (keeping ids), and the changed lines are returned; an edit that would make it invalid is refused (`-32602`), as are names that are taken and values that are not expressions.
+`element` is the id of the added or renamed element. In a text, new elements are written as the printer writes them and changes are made in place. A `.henshin` model is edited through its textual form, compiled and written back (keeping ids), and the changed lines are returned (an empty file gets its whole module, even for an edit that changes nothing); an edit that would make it invalid is refused (`-32602`), as are names that are taken and values that are not expressions.
 
 ## The language server (`oxy lsp`)
 

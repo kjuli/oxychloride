@@ -12,7 +12,8 @@ import { CodeGenerator, type CodeSource, type GenerateOptions } from "./codegen"
 import { OclConsole, type ConsoleContext } from "./console";
 import { Creator } from "./create";
 import { MetamodelDiagramEditor, openDiagram, type DiagramView } from "./diagram";
-import { documentName, reveal } from "./documents";
+import { documentName, reveal, uriOf } from "./documents";
+import { HenshinFiles } from "./henshinFiles";
 import { HenshinPairs, counterpart } from "./henshinPairs";
 import { MODEL_FILES, QVT_FILES, QvtRunner, type QvtRunOptions } from "./qvt";
 import { PackageRegistry, type RegistryNode } from "./registry";
@@ -50,6 +51,8 @@ export interface OxychlorideApi {
   ruleDiagrams(): RuleDiagramView[];
   /** Keeps Henshin texts and `.henshin` files equivalent. */
   pairs: HenshinPairs;
+  /** Creates Henshin transformations, and fills empty `.henshin` files. */
+  henshinFiles: HenshinFiles;
   /** Runs QVT transformations. */
   qvt: QvtRunner;
   /** Opens the transformation view of a Henshin document (engine name) on a model resource. */
@@ -117,6 +120,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   });
 
   const pairs = new HenshinPairs(engine, ready.then(() => undefined));
+  const henshinFiles = new HenshinFiles(engine, ready.then(() => undefined));
   const qvt = new QvtRunner(engine, output);
 
   const setContext = (c: ConsoleContext | undefined) => {
@@ -147,6 +151,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     { dispose: () => void schemas.dispose() },
     MetamodelDiagramEditor.register(context, engine, ready.then(() => undefined)),
     pairs,
+    henshinFiles,
     qvt,
     RuleDiagramEditor.register(context, engine, pairs, ready.then(() => undefined)),
   );
@@ -181,6 +186,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     creator.newModel(node?.kind === "package" ? node.package : undefined),
   );
   register("oxychloride.addChild", (node?: ModelNode) => node && creator.addChild(node));
+  // A Henshin transformation importing the metamodel of a metamodel or model file (Explorer,
+  // editor) or of a package (Metamodels view); from code, the second argument is the file to write.
+  register("oxychloride.newHenshinTransformation", (arg?: vscode.Uri | MetamodelNode, target?: unknown) => {
+    const active = vscode.window.activeTextEditor?.document.uri;
+    const source =
+      arg instanceof vscode.Uri
+        ? arg
+        : arg?.kind === "package"
+          ? uriOf(arg.package.resource)
+          : active && /\.(ecore|oclinecore|hutn|xmi)$/i.test(active.path)
+            ? active
+            : undefined;
+    return henshinFiles.create(source, target instanceof vscode.Uri ? target : undefined);
+  });
 
   // ---------------------------------------------------------------- navigating
 
@@ -542,6 +561,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     diagrams: () => MetamodelDiagramEditor.all(),
     ruleDiagrams: () => RuleDiagramEditor.all(),
     pairs,
+    henshinFiles,
     qvt,
     openTransformation,
     ready,

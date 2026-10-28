@@ -366,6 +366,47 @@ fn edits_henshin_models_like_texts() {
 }
 
 #[test]
+fn sets_the_imports() {
+    let mut rules = Rules::open("university", "university.henshin_text");
+    assert_eq!(rules.diagram().imports, ["university"]);
+    assert_eq!(rules.diagram().packages, ["university", "ecore"]);
+    rules.edit(json!({ "kind": "setImports", "imports": ["university", "ecore"] }));
+    assert!(rules.text().contains("ePackageImport university\nePackageImport ecore\n"), "{}", rules.text());
+    assert_eq!(rules.diagram().imports, ["university", "ecore"]);
+    let e = rules.error(json!({ "kind": "setImports", "imports": ["ecore", "ecore"] }));
+    assert!(e.contains("imported twice"), "{e}");
+
+    // A new text: the imports go after its leading comments.
+    let name = format!("{EXAMPLES}/university/new.henshin_text");
+    rules.ws.open_document(&name, "// New rules.\n");
+    rules.name = name;
+    rules.edit(json!({ "kind": "setImports", "imports": ["university"] }));
+    assert_eq!(rules.text(), "// New rules.\n\nePackageImport university\n");
+    rules.edit(json!({ "kind": "addRule", "name": "r" }));
+    rules.edit(json!({ "kind": "addNode", "scope": "r", "name": "s", "class": "Student", "action": "create" }));
+    assert_eq!(rules.diagram().rules[0].nodes[0].class_id.as_deref(), Some("university::Student"));
+}
+
+#[test]
+fn empty_henshin_models_are_empty_modules() {
+    let mut rules = Rules::open("university", "university.henshin_text");
+    let name = format!("{EXAMPLES}/university/new.henshin");
+    let d = rules.ws.open_document(&name, "");
+    assert!(d.is_empty(), "{d:#?}");
+    rules.name = name;
+    let diagram = rules.diagram();
+    assert!(diagram.imports.is_empty() && diagram.rules.is_empty() && diagram.problems.is_empty(), "{diagram:#?}");
+    // Any edit writes the module, even one that changes nothing in its text.
+    rules.edit(json!({ "kind": "setImports", "imports": [] }));
+    assert!(rules.text().contains("<henshin:Module ") && rules.text().contains(r#"name="new""#), "{}", rules.text());
+    rules.edit(json!({ "kind": "setImports", "imports": ["university"] }));
+    assert!(rules.text().contains(r#"<imports href="http://www.example.org/university/1.0#/"/>"#), "{}", rules.text());
+    rules.edit(json!({ "kind": "addRule", "name": "r" }));
+    rules.edit(json!({ "kind": "addNode", "scope": "r", "name": "s", "class": "Student", "action": "create" }));
+    assert_eq!(rules.diagram().rules[0].nodes[0].class_id.as_deref(), Some("university::Student"));
+}
+
+#[test]
 fn rejects_edits_that_do_not_fit() {
     let rules = Rules::open("university", "university.henshin_text");
     let e = rules.error(

@@ -553,6 +553,8 @@ export interface TransformationParameterSpec {
 export interface TransformationDiagram {
   syntax: "text" | "model";
   imports: string[];
+  /** The top-level packages that can be imported (the workspace's, then Ecore). */
+  packages: string[];
   rules: RuleDiagram[];
   units: UnitDiagram[];
   classes: NodeClass[];
@@ -658,6 +660,7 @@ export interface NodeClass {
 
 /** A change of a transformation document (see `editTransformation`); elements by id. */
 export type TransformationEdit =
+  | { kind: "setImports"; imports: string[] }
   | { kind: "addRule"; name: string }
   | { kind: "addUnit"; name: string }
   | { kind: "rename"; element: string; name: string }

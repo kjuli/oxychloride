@@ -21,6 +21,7 @@ use crate::textdiff::line_replacements;
 /// A transformation text with its syntax tree, which edits are computed for.
 pub(crate) struct Doc<'a> {
     text: &'a str,
+    imports: &'a [QName],
     ix: Index<'a>,
     printer: Printer,
 }
@@ -111,7 +112,12 @@ fn logic_refs<'l>(l: &'l Logic, out: &mut Vec<&'l Name>) {
 
 impl<'a> Doc<'a> {
     pub(crate) fn new(text: &'a str, doc: &'a Document) -> Self {
-        Doc { text, ix: Index::new(doc), printer: Printer::with_indent(indent_unit_or_tab(text)) }
+        Doc {
+            text,
+            imports: &doc.imports,
+            ix: Index::new(doc),
+            printer: Printer::with_indent(indent_unit_or_tab(text)),
+        }
     }
 
     /// Lines of printed text, indented for the line at `at`.
@@ -152,6 +158,10 @@ impl<'a> Doc<'a> {
     pub(crate) fn edit(&self, edit: &TransformationEdit) -> Result<(Vec<ByteEdit>, Option<String>), Error> {
         let mut edits = Vec::new();
         let element = match edit {
+            TransformationEdit::SetImports { imports } => {
+                edits.extend(self.set_imports(imports)?);
+                None
+            }
             TransformationEdit::AddRule { name } => {
                 check_name(name)?;
                 if self.callable_taken(name) {
@@ -463,6 +473,53 @@ impl<'a> Doc<'a> {
             }
         };
         Ok((edits, element))
+    }
+
+    /// Replaces the `ePackageImport` lines; the first imports go to the top (after the
+    /// comments that start the document).
+    fn set_imports(&self, imports: &[String]) -> Result<Option<ByteEdit>, Error> {
+        let mut lines: Vec<String> = Vec::new();
+        for i in imports {
+            let q = parse_qname(i).unwrap_or_else(|_| QName { parts: vec![name(i)], span: 0..0 });
+            let line = format!("ePackageImport {}", print::import(&q));
+            if lines.contains(&line) {
+                return Err(invalid(format!("'{i}' is imported twice")));
+            }
+            lines.push(line);
+        }
+        let block = lines.join("\n");
+        let (Some(first), Some(last)) = (self.imports.first(), self.imports.last()) else {
+            if block.is_empty() {
+                return Ok(None);
+            }
+            // After the leading comment lines and blank lines.
+            let mut at = 0;
+            while at < self.text.len() {
+                let end = line_end(self.text, at);
+                let line = self.text[at..end].trim();
+                if !(line.is_empty() || line.starts_with("//")) {
+                    break;
+                }
+                at = (end + 1).min(self.text.len());
+            }
+            let rest = &self.text[at..];
+            let gap = if rest.trim().is_empty() { "\n" } else { "\n\n" };
+            let lead = if at > 0 && !self.text[..at].ends_with("\n\n") && !self.text[..at].trim().is_empty() {
+                "\n"
+            } else {
+                ""
+            };
+            let tail = if rest.trim().is_empty() { at..self.text.len() } else { at..at };
+            return Ok(Some(ByteEdit::replace(tail, format!("{lead}{block}{gap}"))));
+        };
+        // From the keyword of the first import to the end of the last.
+        let keyword = self.text[..first.span.start].trim_end();
+        let start = keyword.strip_suffix("ePackageImport").map_or(first.span.start, str::len);
+        let span = start..last.span.end;
+        if block.is_empty() {
+            return Ok(Some(ByteEdit::delete(removal(self.text, span, None))));
+        }
+        Ok(Some(ByteEdit::replace(span, block)))
     }
 
     // ------------------------------------------------------------------ inserting

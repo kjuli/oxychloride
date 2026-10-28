@@ -444,6 +444,39 @@ describe("Oxychloride", () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
   });
 
+  it("creates Henshin transformations for metamodels and models, and fills empty .henshin files", async () => {
+    // From a model: the transformation imports its metamodel.
+    const created = vscode.Uri.file(path.join(folder(), "university/campus.henshin"));
+    const model = vscode.Uri.file(path.join(folder(), "university/university.hutn"));
+    const result = await vscode.commands.executeCommand<vscode.Uri | undefined>("oxychloride.newHenshinTransformation", model, created);
+    assert.strictEqual(result?.fsPath, created.fsPath);
+    const text = fs.readFileSync(created.fsPath, "utf8");
+    assert.ok(text.includes('<henshin:Module ') && text.includes('name="campus"'), text);
+    assert.ok(text.includes('<imports href="http://www.example.org/university/1.0#/"/>'), text);
+    const view = await waitFor("the rule diagram", () => api.ruleDiagrams().find((v) => v.document.uri.fsPath === created.fsPath && v.current));
+    await view.edit({ kind: "addRule", name: "r" });
+    await view.edit({ kind: "addNode", scope: "r", name: "s", class: "Student", action: "create" });
+    assert.ok(view.document.getText().includes('name="s"'), view.document.getText());
+    await vscode.commands.executeCommand("workbench.action.files.saveAll");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+
+    // An empty .henshin file gets its module when it is opened; its imports are set in the diagram.
+    const empty = vscode.Uri.file(path.join(folder(), "university/empty.henshin"));
+    fs.writeFileSync(empty.fsPath, "");
+    await vscode.commands.executeCommand("vscode.open", empty);
+    const emptyView = await waitFor("the rule diagram", () => api.ruleDiagrams().find((v) => v.document.uri.fsPath === empty.fsPath));
+    await waitFor("the module in empty.henshin", () => fs.readFileSync(empty.fsPath, "utf8").includes('<henshin:Module '));
+    assert.ok(!emptyView.document.isDirty);
+    // No errors (also not from the XML extension, once it has checked the new text).
+    await waitFor("no errors in empty.henshin", () => errors(empty).length === 0);
+    await emptyView.edit({ kind: "setImports", imports: ["university"] });
+    await emptyView.edit({ kind: "addRule", name: "r" });
+    await emptyView.edit({ kind: "addNode", scope: "r", name: "c", class: "Course", action: "preserve" });
+    assert.ok(emptyView.document.getText().includes('name="c"'), emptyView.document.getText());
+    await vscode.commands.executeCommand("workbench.action.files.saveAll");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
   it("registers metamodels under URIs that cannot be reached", async () => {
     // orders.xml refers to shop.ecore by nsURI and by a platform: URI (the engine's fixtures).
     const ext = vscode.extensions.getExtension("palladio.oxychloride")!;

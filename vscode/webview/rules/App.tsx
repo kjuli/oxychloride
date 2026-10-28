@@ -711,7 +711,11 @@ function Diagram() {
             )}
             {!diagram && !unreadable && <div className="empty">Reading the transformation…</div>}
             {diagram && diagram.rules.length === 0 && diagram.units.length === 0 && (
-              <div className="empty">The transformation has no rules yet: add one with the Rule button.</div>
+              <div className="empty">
+                {diagram.imports.length === 0
+                  ? "The transformation imports no metamodel yet: choose its packages under Imports in the properties, then add rules with the Rule button."
+                  : "The transformation has no rules yet: add one with the Rule button."}
+              </div>
             )}
             {notice && (
               <div className={`notice ${notice.kind}`} role="status" onClick={() => setNotice(undefined)}>

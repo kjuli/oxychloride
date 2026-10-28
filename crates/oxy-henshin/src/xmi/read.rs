@@ -27,8 +27,11 @@ pub struct Read {
 }
 
 /// Reads a `.henshin` file. `path` is where it is, for resolving references to `.ecore` files.
-/// Never fails: problems are reported with spans in `text`.
+/// Never fails: problems are reported with spans in `text`. An empty file is an empty module.
 pub fn read(mm: &Metamodel, text: &str, path: &str) -> Read {
+    if text.trim().is_empty() {
+        return Read::default();
+    }
     let root = match xml::parse(text, path) {
         Ok(root) => root,
         Err(e) => {

@@ -212,4 +212,7 @@ body.vscode-high-contrast:not(.vscode-high-contrast-light) {
 .properties .inline-form button { margin-top: 0; }
 .properties .attribute-row { font-family: var(--vscode-editor-font-family); font-size: 12px; margin: 2px 0; }
 .properties .attribute-row .muted { color: var(--fg); font-family: var(--vscode-font-family); font-size: 11px; }
+.properties .imports { margin: 8px 0; }
+.properties .imports > span { color: var(--muted); }
+.properties .imports .checks { margin: 4px 0; }
 .properties code { font-family: var(--vscode-editor-font-family); font-size: 11.5px; }

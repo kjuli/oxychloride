@@ -395,6 +395,35 @@ function AddAttribute(props: { node: string; names: string[]; edit: Props["edit"
   );
 }
 
+/** The packages the transformation imports (their classes are the classes of nodes): those
+ * of the workspace to check, and imports that name no package. */
+function Imports(props: { diagram: TransformationDiagram; edit: Props["edit"] }) {
+  const { imports, packages } = props.diagram;
+  const names = [...packages, ...imports.filter((i) => !packages.includes(i))];
+  const toggle = (name: string, on: boolean) =>
+    void props.edit({ kind: "setImports", imports: on ? [...imports, name] : imports.filter((i) => i !== name) });
+  return (
+    <div className="imports">
+      <span>Imports</span>
+      {names.length === 0 ? (
+        <p className="hint">No metamodel is loaded: open an .oclinecore metamodel or register an .ecore file.</p>
+      ) : (
+        <div className="checks">
+          {names.map((n) => (
+            <Check
+              key={n}
+              label={n}
+              checked={imports.includes(n)}
+              title={packages.includes(n) ? `Use the classes of ${n} in rules` : `${n} is not a package of the workspace`}
+              onChange={(on) => toggle(n, on)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Overview(props: Props) {
   const d = props.diagram;
   return (
@@ -413,6 +442,7 @@ function Overview(props: Props) {
               : `${props.pair.partner} is not updated while this document has errors: ${props.pair.reason ?? ""}`}
           </p>
         )}
+        <Imports diagram={d} edit={props.edit} />
         <p className="hint">
           Pick a tool and an action: click into a rule to add a node, drag from a node to another to add an edge. Double-click names and attributes to edit them;
           Delete removes the selection.

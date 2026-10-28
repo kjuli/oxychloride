@@ -1273,6 +1273,9 @@ pub struct TransformationDiagram {
     pub syntax: TransformationSyntax,
     /// The imported packages, as written.
     pub imports: Vec<String>,
+    /// The packages of the workspace that can be imported (top-level packages, as an import
+    /// names them).
+    pub packages: Vec<String>,
     pub rules: Vec<RuleDiagram>,
     pub units: Vec<UnitDiagram>,
     /// The classes nodes can have: those of the imported packages first.
@@ -1475,6 +1478,10 @@ pub struct NodeClassReference {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TransformationEdit {
+    /// Replaces the imported packages (names as written after `ePackageImport`).
+    SetImports {
+        imports: Vec<String>,
+    },
     AddRule {
         name: String,
     },
