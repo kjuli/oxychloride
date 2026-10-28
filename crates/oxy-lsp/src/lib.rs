@@ -10,8 +10,12 @@
 //!   folders are loaded as well (from disk while they are not open), so models find their
 //!   metamodels and constraints, transformations their rules, and models the QVT
 //!   transformations they fit (`qvtTransformations`), without opening them. A changed `.ecore`
-//!   file that is loaded (or registered) reloads the metamodels. The package registry
-//!   (`setRegistry`) can be given as `initializationOptions.registry`, so that it is there
+//!   file that is loaded (or registered) reloads the metamodels. `.ecore` files open in the
+//!   editor are documents (their text stands for the file), and so are files of the model
+//!   extensions that bundles of the Eclipse projects register (`.repository`, …: XMI models).
+//!   The package registry (`setRegistry`) and the Eclipse projects with their target platform
+//!   (`setPlatform`) can be given as `initializationOptions.registry` and
+//!   `initializationOptions.platform`, so that they are there
 //!   before the workspace folders are loaded;
 //! * once changes settle, the diagnostics of all documents are published: models are checked
 //!   against the constraints (invariants, pre- and postconditions) as they are edited;
@@ -51,6 +55,7 @@ const MUTATING_METHODS: &[&str] = &[
     "loadModel",
     "mapUri",
     "setRegistry",
+    "setPlatform",
     "reset",
     "clearModels",
     "reload",
@@ -75,6 +80,11 @@ pub fn serve(connection: &Connection) -> Result<()> {
     if let Some(entries) = params.pointer("/initializationOptions/registry") {
         let entries = serde_json::from_value(entries.clone()).unwrap_or_default();
         server.ws().set_registry(entries);
+    }
+    // The Eclipse projects and the target platform too (their packages are metamodels).
+    if let Some(settings) = params.pointer("/initializationOptions/platform") {
+        let settings = serde_json::from_value(settings.clone()).unwrap_or_default();
+        server.ws().set_platform(settings);
     }
     server.index(&workspace_folders(&params));
     loop {
@@ -141,12 +151,20 @@ fn language_of(path: &str) -> Option<Language> {
         "oclinecore" => Some(Language::OclInEcore),
         "hutn" => Some(Language::Hutn),
         "xmi" => Some(Language::Xmi),
+        "ecore" => Some(Language::Ecore),
         "henshin_text" => Some(Language::Henshin),
         "henshin" => Some(Language::HenshinModel),
         "qvto" => Some(Language::Qvto),
         "qvtr" => Some(Language::Qvtr),
         _ => None,
     }
+}
+
+/// Whether a file is a model of a file extension that bundles of the Eclipse projects register
+/// (`.repository`, …).
+fn is_registered_model(ws: &Workspace, path: &str) -> bool {
+    let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or_default();
+    !ext.is_empty() && ws.model_extensions().iter().any(|e| e.eq_ignore_ascii_case(ext))
 }
 
 /// The language of a document the client opened with `language_id`.
@@ -193,6 +211,9 @@ struct LspServer {
     pending: HashMap<String, String>,
     /// Workspace files loaded from disk because they are not open.
     indexed: HashSet<String>,
+    /// Documents open in the editor whose language is not known (yet): their URI and text. Files
+    /// of model extensions that bundles register become models once the platform is set.
+    unknown: HashMap<String, (String, String)>,
     /// The diagnostics last published, by URI.
     published: HashMap<String, Json>,
     /// The packages, models and registry entries last announced (as JSON text).
@@ -210,6 +231,7 @@ impl LspServer {
             languages: HashMap::new(),
             pending: HashMap::new(),
             indexed: HashSet::new(),
+            unknown: HashMap::new(),
             published: HashMap::new(),
             browsed: String::new(),
             dirty: true,
@@ -285,6 +307,14 @@ impl LspServer {
 
     /// Gives the engine the latest text of every changed document.
     fn flush(&mut self) {
+        let models: Vec<String> =
+            self.unknown.keys().filter(|n| is_registered_model(self.rpc.workspace(), n)).cloned().collect();
+        for name in models {
+            let (uri, text) = self.unknown.remove(&name).expect("listed");
+            self.open.insert(name.clone(), uri);
+            self.languages.insert(name.clone(), Language::Xmi);
+            self.pending.insert(name, text);
+        }
         for (name, text) in std::mem::take(&mut self.pending) {
             if let Some(language) = self.languages.get(&name).copied() {
                 self.ws().open_document_as(&name, &text, language);
@@ -304,13 +334,32 @@ impl LspServer {
         let name = document_name(&uri);
         if n.method == "textDocument/didOpen" {
             let language_id = p.pointer("/textDocument/languageId").and_then(Json::as_str).unwrap_or_default();
-            let Some(language) = editor_language(&name, language_id) else { return };
             let text = p.pointer("/textDocument/text").and_then(Json::as_str).unwrap_or_default();
+            let registered = is_registered_model(self.rpc.workspace(), &name).then_some(Language::Xmi);
+            let Some(language) = editor_language(&name, language_id).or(registered) else {
+                self.unknown.insert(name, (uri, text.to_string()));
+                return;
+            };
             self.open.insert(name.clone(), uri);
             self.languages.insert(name.clone(), language);
             self.indexed.remove(&name);
             self.pending.insert(name, text.to_string());
             self.dirty = true;
+            return;
+        }
+        if let Some((_, text)) = self.unknown.get_mut(&name) {
+            match n.method.as_str() {
+                "textDocument/didChange" => {
+                    let changes = p.get("contentChanges").and_then(Json::as_array);
+                    if let Some(t) = changes.and_then(|c| c.last()).and_then(|c| c.get("text")).and_then(Json::as_str) {
+                        *text = t.to_string();
+                    }
+                }
+                "textDocument/didClose" => {
+                    self.unknown.remove(&name);
+                }
+                _ => {}
+            }
             return;
         }
         let known = self.open.contains_key(&name).then_some(name);
@@ -453,6 +502,11 @@ impl LspServer {
             let (path, d) = match &d.origin {
                 Origin::Document { name } => (name.clone(), d),
                 Origin::File { path } => (path.clone(), d),
+                // Where the expression is in the file (in the `value` of its `<details>`).
+                Origin::Ecore { resource, location: Some(at), .. } => {
+                    let at = *at;
+                    (resource.clone(), Diagnostic { range: at, ..d })
+                }
                 // The range is relative to the annotation's text: show it on the file.
                 Origin::Ecore { resource, .. } => (
                     resource.clone(),

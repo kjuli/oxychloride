@@ -8,11 +8,15 @@
 //! which is then known by that URI too. Prefix entries map whole folders and are used on
 //! demand, like [`Workspace::map_uri`].
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use oxy_ecore::ecore_loader::{self, canonical_uri};
 use oxy_ecore::{EcoreLoad, LoadError, Metamodel};
 
+use crate::archive;
+use crate::platform::Platform;
 use crate::protocol::*;
 use crate::workspace::Workspace;
 
@@ -26,47 +30,107 @@ pub(crate) struct EntryState {
     warnings: Vec<Diagnostic>,
 }
 
-/// Where URIs are read from: the registry's entries and the URI mappings.
+/// Where URIs are read from: the registry's entries, the URI mappings, and the Eclipse
+/// projects and target platform.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Locator {
     /// Registered URIs and their files.
     exact: Vec<(String, String)>,
     /// URI prefixes and their folders.
     prefixes: Vec<(String, String)>,
+    platform: Arc<Platform>,
+    /// The texts of open `.ecore` documents, by path: they stand for the files.
+    overlays: Arc<HashMap<String, String>>,
 }
 
 impl Locator {
-    /// The file or path a URI is read from, if it is registered or under a mapped prefix.
+    /// The file or path a URI is read from, if it is registered, under a mapped prefix, or
+    /// known to the platform (`platform:/…` URIs, packages of bundles, their URI mappings).
     pub(crate) fn locate(&self, uri: &str) -> Option<String> {
         if let Some((_, location)) = self.exact.iter().find(|(u, _)| u == uri) {
             return Some(location.clone());
         }
-        self.locate_prefixed(uri)
+        self.locate_prefixed(uri).or_else(|| self.platform.locate(uri))
     }
 
     /// The path of a URI under a mapped prefix (the longest one).
     pub(crate) fn locate_prefixed(&self, uri: &str) -> Option<String> {
         let (from, to) =
             self.prefixes.iter().filter(|(from, _)| uri.starts_with(from.as_str())).max_by_key(|(f, _)| f.len())?;
-        Some(canonical_uri(&Path::new(to).join(&uri[from.len()..])))
+        let rest = &uri[from.len()..];
+        if archive::split_uri(to).is_some() || to.ends_with("!/") {
+            return Some(format!("{to}{rest}"));
+        }
+        Some(canonical_uri(&Path::new(to).join(rest)))
+    }
+
+    /// The text at a location (a path or an archive URI); an open `.ecore` document's text
+    /// for its file.
+    pub(crate) fn read(&self, location: &str) -> Option<String> {
+        if let Some(text) = self.overlays.get(location) {
+            return Some(text.clone());
+        }
+        if archive::split_uri(location).is_some() {
+            return archive::read_uri(location);
+        }
+        std::fs::read_to_string(location).ok()
+    }
+
+    /// Whether there is a file at a location (a path or an archive URI).
+    pub(crate) fn exists(&self, location: &str) -> bool {
+        match archive::split_uri(location) {
+            Some((jar, entry)) => archive::open_cached(&jar).is_ok_and(|a| a.contains(entry)),
+            None => self.overlays.contains_key(location) || Path::new(location).is_file(),
+        }
     }
 
     /// Reads a referenced resource (see [`ecore_loader::Fetch`]): from its registered location, else from disk.
     pub(crate) fn fetch(&self, uri: &str) -> Option<(String, String)> {
         match self.locate(uri) {
-            Some(path) => std::fs::read_to_string(&path).ok().map(|text| (canonical_uri(Path::new(&path)), text)),
-            None => ecore_loader::read_from_disk(uri),
+            Some(location) => {
+                let text = self.read(&location)?;
+                let location = if archive::split_uri(&location).is_some() {
+                    location
+                } else {
+                    canonical_uri(Path::new(&location))
+                };
+                Some((location, text))
+            }
+            None if archive::split_uri(uri).is_some() => archive::read_uri(uri).map(|t| (uri.to_string(), t)),
+            None => match self.overlays.get(uri) {
+                Some(text) => Some((uri.to_string(), text.clone())),
+                None => ecore_loader::read_from_disk(uri),
+            },
         }
     }
 
-    /// Loads an `.ecore` file into `mm`, reading the files it refers to through the registry.
+    /// The URIs a file is known by in Eclipse (`platform:/resource/…`, `platform:/plugin/…`).
+    pub(crate) fn logical_uris(&self, location: &str) -> Vec<String> {
+        self.platform.logical_uris(location)
+    }
+
+    /// Loads an `.ecore` file (a path, or an archive URI) into `mm`, reading the files it
+    /// refers to through the registry; relative references resolve against the URIs the file
+    /// is known by in Eclipse first, as in EMF.
     pub(crate) fn load_file(&self, mm: &mut Metamodel, path: &Path) -> Result<EcoreLoad, LoadError> {
-        ecore_loader::load_file_with(mm, path, &mut |uri| self.fetch(uri))
+        let location = path.to_string_lossy();
+        let location =
+            if archive::split_uri(&location).is_some() { location.into_owned() } else { canonical_uri(path) };
+        let logical = self.logical_uris(&location);
+        let mut fetch = |uri: &str| self.fetch(uri);
+        if mm.resource_of_uri(&location).is_none()
+            && (archive::split_uri(&location).is_some() || self.overlays.contains_key(&location))
+        {
+            let text = self.read(&location).ok_or_else(|| LoadError::new(&location, "cannot read file".to_string()))?;
+            return ecore_loader::load_as(mm, &text, &location, &logical, &mut fetch);
+        }
+        ecore_loader::load_file_as(mm, &location, &logical, &mut fetch)
     }
 
     /// Loads `.ecore` content into `mm`, reading the files it refers to through the registry.
     pub(crate) fn load_str(&self, mm: &mut Metamodel, text: &str, uri: &str) -> Result<EcoreLoad, LoadError> {
-        ecore_loader::load_with(mm, text, uri, &mut |u| self.fetch(u))
+        let logical = self.logical_uris(uri);
+        ecore_loader::load_as(mm, text, uri, &logical, &mut |u| self.fetch(u))
     }
 }
 
@@ -168,6 +232,8 @@ impl Workspace {
                 .map(|e| (e.uri.clone(), e.location.clone()))
                 .chain(self.uri_mappings.iter().cloned())
                 .collect(),
+            platform: self.platform.clone(),
+            overlays: self.overlays.clone(),
         }
     }
 
@@ -207,5 +273,64 @@ impl Workspace {
             states.push(state);
         }
         self.registry_state = states;
+        self.load_platform_packages();
+    }
+
+    /// Loads the packages the Eclipse projects register (their `plugin.xml`), after the
+    /// registry's files (which take precedence), recording their state.
+    fn load_platform_packages(&mut self) {
+        let mut states = Vec::new();
+        let locator = self.locator();
+        for (ns_uri, file) in self.platform.project_packages() {
+            let state =
+                |status, message: Option<String>| EntryState { status, message, resource: None, warnings: Vec::new() };
+            let state = if let Some(p) = self.base_mm.package_by_ns_uri(&ns_uri) {
+                let resource = self.base_mm.package(p).resource;
+                EntryState { resource: Some(resource), ..state(RegistryStatus::Loaded, None) }
+            } else if !locator.exists(&file) {
+                state(RegistryStatus::Missing, Some(format!("there is no file '{file}'")))
+            } else {
+                match self.load_metamodel_file(Path::new(&file)) {
+                    Ok(load) => EntryState {
+                        status: RegistryStatus::Loaded,
+                        message: None,
+                        resource: Some(load.resource),
+                        warnings: load.warnings.iter().map(crate::workspace::load_diagnostic).collect(),
+                    },
+                    Err(e) => state(RegistryStatus::Error, Some(e.to_string())),
+                }
+            };
+            states.push((ns_uri, state));
+        }
+        self.platform_state = states;
+    }
+
+    /// Sets the Eclipse projects and the target platform (see [`PlatformSettings`]): finds the
+    /// projects below the workspace folders again, reads their manifests and `plugin.xml`s and
+    /// those of the bundles they require, and reloads. Returns their state.
+    pub fn set_platform(&mut self, settings: PlatformSettings) -> PlatformInfo {
+        let platform = Platform::new(settings);
+        let changed = !(platform.is_empty() && self.platform.is_empty());
+        self.platform = Arc::new(platform);
+        if changed {
+            self.reload();
+        }
+        self.platform()
+    }
+
+    /// The Eclipse projects, the bundles of the target platform they require, and the state of
+    /// the packages they register.
+    pub fn platform(&self) -> PlatformInfo {
+        let packages = |ns_uri: &str| match self.platform_state.iter().find(|(u, _)| u == ns_uri) {
+            Some((_, state)) => (state.status, state.message.clone()),
+            None => (RegistryStatus::Loaded, Some("registered by another project".to_string())),
+        };
+        self.platform.info(&packages)
+    }
+
+    /// The file extensions of models that bundles register (`.repository`, …): such files are
+    /// XMI models.
+    pub fn model_extensions(&self) -> Vec<String> {
+        self.platform.model_extensions()
     }
 }

@@ -180,6 +180,15 @@
           "default": "",
           "markdownDescription": "Path of the `oxy` executable that runs the language server (`oxy lsp`). Empty: the one bundled with the extension, else `target/debug/oxy` or `target/release/oxy` of an Oxychloride checkout in the workspace, else `oxy` on the `PATH`."
         },
+        "oxychloride.targetPlatform": {
+          "type": "array",
+          "scope": "resource",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "The target platform of the Eclipse projects in the workspace (as `targetPlatform` in `oxychloride.json`, which also counts): an Eclipse installation, a folder of bundles (`plugins`, a bundle pool such as `~/.p2/pool`), bundles (jars, folders) or folders with bundles further down. `platform:/plugin/…` URIs of bundles that are not projects of the workspace, and the packages they register, come from it. Paths are relative to the workspace folder; `~/` is the home folder."
+        },
         "oxychloride.registry": {
           "type": "object",
           "scope": "resource",
@@ -315,6 +324,11 @@
       {
         "command": "oxychloride.initProject",
         "title": "Make Folder a Modeling Project",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.importEclipseProjects",
+        "title": "Import Eclipse Projects…",
         "category": "Oxychloride"
       },
       {
@@ -589,6 +603,10 @@
         },
         {
           "command": "oxychloride.initProject",
+          "when": "view == oxychloride.projects"
+        },
+        {
+          "command": "oxychloride.importEclipseProjects",
           "when": "view == oxychloride.projects"
         },
         {
@@ -965,6 +983,11 @@
         },
         {
           "command": "oxychloride.initProject",
+          "when": "explorerResourceIsFolder",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.importEclipseProjects",
           "when": "explorerResourceIsFolder",
           "group": "7_modification"
         },

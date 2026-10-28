@@ -36,8 +36,13 @@ pub enum Language {
     OclInEcore,
     /// HUTN: an instance model in the OMG Human-Usable Textual Notation (`.hutn`).
     Hutn,
-    /// XMI: an instance model as EMF writes it (`.xmi`), edited as text.
+    /// XMI: an instance model as EMF writes it (`.xmi`, or an extension a bundle registers for
+    /// its models, such as `.repository`), edited as text.
     Xmi,
+    /// Ecore: a metamodel as EMF writes it (`.ecore`), edited as XML. The document's text
+    /// stands for the file: the workspace loads it instead, and the OCL embedded in its
+    /// annotations is checked where it is.
+    Ecore,
     /// Henshin: graph transformation rules and units in Henshin's textual syntax
     /// (`.henshin_text`).
     Henshin,
@@ -76,6 +81,7 @@ impl Language {
             "oclinecore" => Language::OclInEcore,
             "hutn" => Language::Hutn,
             "xmi" => Language::Xmi,
+            "ecore" => Language::Ecore,
             "henshin_text" => Language::Henshin,
             "henshin" => Language::HenshinModel,
             "qvto" => Language::Qvto,
@@ -90,6 +96,7 @@ impl Language {
             Language::OclInEcore => "oclinecore",
             Language::Hutn => "hutn",
             Language::Xmi => "xmi",
+            Language::Ecore => "ecore",
             Language::Henshin => "henshin_text",
             Language::HenshinModel => "henshin",
             Language::Qvto => "qvto",
@@ -104,8 +111,16 @@ impl Language {
 pub enum Origin {
     /// A Complete OCL document, identified by the name it was opened with.
     Document { name: String },
-    /// An expression embedded in an `.ecore` file.
-    Ecore { resource: String, element: String, key: String },
+    /// An expression embedded in an `.ecore` file. The diagnostic's range is relative to the
+    /// expression; `location` is that range in the file (in the `value` of the annotation's
+    /// `<details>`), when known.
+    Ecore {
+        resource: String,
+        element: String,
+        key: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        location: Option<Range>,
+    },
     /// An expression passed to `evaluate`.
     Expression,
     /// A metamodel or model file that failed to load.
@@ -478,6 +493,160 @@ pub struct RegistryInfo {
     pub imports: Vec<RegisteredResource>,
     /// Problems loading the file, e.g. references that cannot be resolved.
     pub warnings: Vec<Diagnostic>,
+}
+
+// ------------------------------------------------------------------ Eclipse projects
+
+/// The Eclipse projects of the workspace and its target platform (see docs/PROJECTS.md,
+/// "Eclipse projects"): `platform:/resource` and `platform:/plugin` URIs, the packages bundles
+/// register and their URI mappings resolve as in Eclipse.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlatformSettings {
+    /// Folders searched for Eclipse projects (folders with a `.project` or a
+    /// `META-INF/MANIFEST.MF`), like the projects of an Eclipse workspace.
+    pub workspace: Vec<String>,
+    /// The target platform: bundles (jars or folders), folders of bundles (an installation's
+    /// `plugins`, a bundle pool), installations, or folders with bundles further down. `~/` is
+    /// the home folder.
+    pub target: Vec<String>,
+}
+
+/// A package a bundle registers (`org.eclipse.emf.ecore.generated_package`, `dynamic_package`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EclipsePackageInfo {
+    pub ns_uri: String,
+    /// Its `.ecore` file (a path, or an `archive:` URI into a jar).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub location: Option<String>,
+    /// For workspace projects: `loaded`, or why not; for the target platform's bundles `folder`
+    /// (loaded when something refers to it).
+    pub status: RegistryStatus,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub message: Option<String>,
+}
+
+/// A bundle a bundle requires (`Require-Bundle`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredBundle {
+    pub name: String,
+    pub optional: bool,
+    /// Where it is (a workspace project or the target platform), if anywhere.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub location: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UriMappingInfo {
+    pub source: String,
+    pub target: String,
+}
+
+/// An Eclipse project of the workspace, or a bundle of the target platform.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EclipseBundleInfo {
+    /// The symbolic name, else the project's name.
+    pub name: String,
+    /// The project's name (`.project`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub symbolic_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub version: Option<String>,
+    /// Its folder or jar.
+    pub location: String,
+    pub packages: Vec<EclipsePackageInfo>,
+    pub requires: Vec<RequiredBundle>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub uri_mappings: Vec<UriMappingInfo>,
+    /// File extensions of its models (`extension_parser`), e.g. `repository`.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub model_extensions: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub problems: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingBundle {
+    pub name: String,
+    pub required_by: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetLocationInfo {
+    pub location: String,
+    /// How many bundles it has.
+    pub bundles: usize,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub problem: Option<String>,
+}
+
+/// The state of the Eclipse projects and the target platform (`platform`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformInfo {
+    pub settings: PlatformSettings,
+    pub projects: Vec<EclipseBundleInfo>,
+    /// The bundles of the target platform the projects require, transitively.
+    pub required: Vec<EclipseBundleInfo>,
+    /// Required bundles that are neither workspace projects nor in the target platform.
+    pub missing: Vec<MissingBundle>,
+    pub target: Vec<TargetLocationInfo>,
+    /// File extensions of models (opened as XMI), from the projects and their requirements.
+    pub model_extensions: Vec<String>,
+}
+
+/// A target platform found on this machine (`scanEclipseProjects`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetCandidate {
+    pub location: String,
+    /// What it is (`bundle pool`, `Eclipse installation`, `target platform of the Eclipse workspace …`).
+    pub kind: String,
+    pub bundles: usize,
+    /// How many of the bundles the projects require (and the folder lacks) it has.
+    pub provides: usize,
+}
+
+/// The Eclipse projects in a folder, for importing them (`scanEclipseProjects`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EclipseScan {
+    pub projects: Vec<EclipseBundleInfo>,
+    /// The bundles they require that are not among them.
+    pub required: Vec<String>,
+    /// Target platforms on this machine, those with most of `required` first.
+    pub targets: Vec<TargetCandidate>,
+}
+
+/// Makes a folder with Eclipse projects a modeling project (`importEclipseProjects`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ImportEclipseRequest {
+    /// The folder (it becomes the project's folder).
+    pub folder: String,
+    /// The project's name (default: the Eclipse project's, if there is one, else the folder's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The target platform (default: none). Paths are written as given.
+    pub target_platform: Vec<String>,
+}
+
+/// A modeling project made of Eclipse projects: its manifest (not written), and what was found.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedProject {
+    /// The manifest's path and text.
+    pub manifest: ProjectFile,
+    /// The Eclipse projects, their packages and their requirements, with the target platform.
+    pub platform: PlatformInfo,
 }
 
 // ------------------------------------------------------------------ editor support

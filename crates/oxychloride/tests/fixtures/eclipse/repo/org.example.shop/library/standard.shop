@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shop:Catalog xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:shop="http://example.org/shop/1.0" name="standard">
+  <items name="bolt" price="1"/>
+</shop:Catalog>

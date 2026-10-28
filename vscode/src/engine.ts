@@ -19,7 +19,8 @@ export interface Range {
 
 export type Origin =
   | { kind: "document"; name: string }
-  | { kind: "ecore"; resource: string; element: string; key: string }
+  /** `location`: where the expression is in the file (the diagnostic's range is relative to it). */
+  | { kind: "ecore"; resource: string; element: string; key: string; location?: Range }
   | { kind: "expression" }
   | { kind: "file"; path: string };
 
@@ -738,7 +739,7 @@ export interface QvtRunResult {
 }
 
 /** The language of a document (`newProject`'s parts, `newDocument`). */
-export type DocumentLanguage = "ocl" | "oclinecore" | "hutn" | "xmi" | "henshin" | "henshinModel" | "qvto" | "qvtr";
+export type DocumentLanguage = "ocl" | "oclinecore" | "hutn" | "xmi" | "ecore" | "henshin" | "henshinModel" | "qvto" | "qvtr";
 
 /** What `newProject` creates: a modeling project around one metamodel. */
 export interface NewProjectRequest {
@@ -759,6 +760,65 @@ export interface NewProject {
   package: string;
   nsUri: string;
   files: { path: string; text: string }[];
+}
+
+/** The Eclipse projects of the workspace and its target platform (see `PlatformSettings` in protocol.rs). */
+export interface PlatformSettings {
+  /** Folders searched for Eclipse projects (`.project`, `META-INF/MANIFEST.MF`). */
+  workspace: string[];
+  /** Bundles, folders of bundles, installations; `~/` is the home folder. */
+  target: string[];
+}
+
+export interface EclipsePackageInfo {
+  nsUri: string;
+  location?: string;
+  status: RegistryInfo["status"];
+  message?: string;
+}
+
+export interface EclipseBundleInfo {
+  name: string;
+  project?: string;
+  symbolicName?: string;
+  version?: string;
+  location: string;
+  packages: EclipsePackageInfo[];
+  requires: { name: string; optional: boolean; location?: string }[];
+  uriMappings?: { source: string; target: string }[];
+  modelExtensions?: string[];
+  problems?: string[];
+}
+
+export interface PlatformInfo {
+  settings: PlatformSettings;
+  projects: EclipseBundleInfo[];
+  /** The target platform's bundles the projects require (transitively). */
+  required: EclipseBundleInfo[];
+  missing: { name: string; requiredBy: string }[];
+  target: { location: string; bundles: number; problem?: string }[];
+  /** File extensions of models (opened as XMI). */
+  modelExtensions: string[];
+}
+
+/** A target platform found on this machine. */
+export interface TargetCandidate {
+  location: string;
+  kind: string;
+  bundles: number;
+  /** How many of the bundles the projects require it has. */
+  provides: number;
+}
+
+export interface EclipseScan {
+  projects: EclipseBundleInfo[];
+  required: string[];
+  targets: TargetCandidate[];
+}
+
+export interface ImportedProject {
+  manifest: { path: string; text: string };
+  platform: PlatformInfo;
 }
 
 /** What `newDocument` writes: a starting point about loaded packages (qualified names). */
@@ -789,6 +849,11 @@ export class Engine {
   registry = () => this.call<RegistryInfo[]>("registry");
   /** Replaces the package registry; the metamodels, models and imports are reloaded. */
   setRegistry = (entries: RegistryEntry[]) => this.call<RegistryInfo[]>("setRegistry", { entries });
+  platform = () => this.call<PlatformInfo>("platform");
+  setPlatform = (settings: PlatformSettings) => this.call<PlatformInfo>("setPlatform", settings);
+  scanEclipseProjects = (folder: string) => this.call<EclipseScan>("scanEclipseProjects", { folder });
+  importEclipseProjects = (folder: string, targetPlatform: string[], name?: string) =>
+    this.call<ImportedProject>("importEclipseProjects", { folder, targetPlatform, name });
   exportDocument = (name: string, target?: string) =>
     this.call<{ text: string; format: "ecore" | "xmi" | "henshin" | "henshin_text" }>("exportDocument", { name, target });
   convertFile = (path: string, to: "oclinecore" | "hutn") => this.call<{ text: string }>("convertFile", { path, to });

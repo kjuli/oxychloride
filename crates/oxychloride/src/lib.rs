@@ -37,10 +37,13 @@
 //! assert_eq!(result.display, "Bag{-3}");
 //! ```
 
+mod archive;
 mod diagram;
+mod ecore_documents;
 mod editor;
 mod generate;
 mod henshin_documents;
+pub mod platform;
 pub mod project;
 pub mod protocol;
 mod qvt_documents;

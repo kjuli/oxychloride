@@ -10,8 +10,8 @@ use serde_json::{Value as Json, json};
 use std::collections::HashMap;
 
 use crate::protocol::{
-    CodeRequest, Language, MetamodelEdit, NewDocumentRequest, NewProjectRequest, ObjectRef, Position, QvtRunRequest,
-    RegistryEntry, TransformationEdit,
+    CodeRequest, ImportEclipseRequest, Language, MetamodelEdit, NewDocumentRequest, NewProjectRequest, ObjectRef,
+    PlatformSettings, Position, QvtRunRequest, RegistryEntry, TransformationEdit,
 };
 use crate::transform::ExploreRequest;
 use crate::workspace::{Error, ValidateOptions, Workspace};
@@ -26,6 +26,10 @@ pub const METHODS: &[&str] = &[
     "mapUri",
     "registry",
     "setRegistry",
+    "platform",
+    "setPlatform",
+    "scanEclipseProjects",
+    "importEclipseProjects",
     "reset",
     "clearModels",
     "reload",
@@ -117,6 +121,12 @@ struct LoadParams {
 struct MapUriParams {
     from: String,
     to: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderParams {
+    folder: String,
 }
 
 #[derive(Deserialize)]
@@ -405,6 +415,19 @@ impl Server {
             "setRegistry" => {
                 let p: RegistryParams = params(p)?;
                 to_json(ws.set_registry(p.entries))
+            }
+            "platform" => to_json(ws.platform()),
+            "setPlatform" => {
+                let p: PlatformSettings = params(p)?;
+                to_json(ws.set_platform(p))
+            }
+            "scanEclipseProjects" => {
+                let p: FolderParams = params(p)?;
+                to_json(crate::platform::scan(std::path::Path::new(&p.folder)))
+            }
+            "importEclipseProjects" => {
+                let p: ImportEclipseRequest = params(p)?;
+                to_json(Workspace::import_eclipse_projects(&p)?)
             }
             "reset" => {
                 ws.reset();

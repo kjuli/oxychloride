@@ -123,7 +123,8 @@ impl Workspace {
                 self.locator().locate(&base).unwrap_or_else(|| oxy_ecore::ecore_loader::resolve_relative(name, &base));
             let file = Path::new(&path);
             let oclinecore = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("oclinecore"));
-            if file.is_file() && !oclinecore {
+            // A file, or an entry of a bundle's jar.
+            if self.locator().exists(&path) && !oclinecore {
                 let _ = self.load_ecore_file(file);
             }
         }

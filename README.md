@@ -52,6 +52,10 @@ $B qvt examples/qvt/uml2rdbms.qvtr -e examples/qvt/uml.oclinecore -e examples/qv
 # A modeling project: a metamodel with constraints, models and transformations of it; check all of it.
 $B new shop && (cd shop && ../$B check)
 
+# Eclipse plug-ins with metamodels (e.g. a clone of Palladio-Core-PCM): make the folder a project, with
+# the target platform found on this machine, and check its metamodels, their OCL and its models.
+(cd Palladio-Core-PCM && $B import && $B check)
+
 # Generate a Python package (or a Rust crate) with the OCL as native code.
 $B generate examples/library/library.ecore -d examples/library/library.ocl -t python -o generated
 $B generate examples/university/university.oclinecore -t rust -o generated
@@ -117,6 +121,8 @@ package university : uni = 'http://www.example.org/university/1.0' {
 ```
 
 As in Eclipse OCL, a missing multiplicity means `[1]` (write `[?]` for optional), multi-valued features are unordered unless qualified `ordered`, and `Integer`/`Real` map to `EBigInteger`/`EBigDecimal` (other Ecore types are available as `ecore::EInt` etc.). The OCL is stored in the metamodel the way Eclipse stores it in `.ecore` files, so `oxy convert` (or *Export* in the app) produces `.ecore` files Eclipse tools can read. Not supported: generic types, `static` features, nested annotation contents.
+
+**`.ecore` files** are documents too: edited as text or in the metamodel diagram (whose edits keep the file as EMF saves it), with the OCL of their annotations (`http://www.eclipse.org/emf/2002/Ecore/OCL`, `/Pivot`, `/LPG`) checked, hovered and completed in the attribute values. Folders of **Eclipse projects** — plug-ins with metamodels, such as the Palladio Component Model's — work as in an Eclipse workspace: `platform:/resource` and `platform:/plugin` URIs, the packages their `plugin.xml` registers, URI mappings (`pathmap://…`), model files of their extensions (`.repository`, …) and the bundles they require from a target platform (Eclipse installations, bundle pools, jars); see [docs/PROJECTS.md](docs/PROJECTS.md#eclipse-projects).
 
 **HUTN** (`.hutn`) is the OMG Human-Usable Textual Notation for instance models — generic, so it works with any metamodel:
 

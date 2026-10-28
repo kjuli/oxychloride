@@ -57,7 +57,7 @@ fn new_projects_take_their_parts_and_format() {
     let manifest = std::fs::read_to_string(dir.join("grid/oxychloride.json")).unwrap();
     assert!(manifest.contains(r#""urn:grid": "metamodels/grid.ecore""#), "{manifest}");
     let out = oxy(&dir.join("grid"), &["check"]);
-    assert!(stdout(&out).contains("2 documents checked, no problems"), "{out:?}");
+    assert!(stdout(&out).contains("3 documents checked, no problems"), "{out:?}");
 }
 
 #[test]

@@ -44,8 +44,10 @@ interface ProjectsApi {
   projects: { name: string; root: vscode.Uri; manifestUri: vscode.Uri }[];
   ready: Promise<void>;
   load(): Promise<void>;
-  getChildren(node?: unknown): Promise<{ kind: string; uri?: vscode.Uri; category?: { id: string } }[]>;
+  getChildren(node?: unknown): Promise<{ kind: string; uri?: vscode.Uri; category?: { id: string }; bundle?: { name: string } }[]>;
   getTreeItem(node: unknown): Promise<vscode.TreeItem>;
+  /** The Eclipse projects and the target platform, as the engine reported them. */
+  platform?: { info?: { projects: { name: string }[]; missing: unknown[]; modelExtensions: string[] } };
 }
 
 type ProjectNode = { kind: "project"; project: ProjectsApi["projects"][number] };
@@ -398,7 +400,8 @@ describe("Oxychloride", () => {
     const view = await waitFor("the diagram", () => api.diagrams().find((v) => v.document.uri.fsPath === uri.fsPath && v.current));
     assert.strictEqual(view.current!.syntax, "ecore");
     await view.edit({ kind: "update", element: "library::Loan.book", properties: { upper: -1 } });
-    assert.ok(view.document.getText().includes('name="book" lowerBound="1" upperBound="-1" eType="#//Book"'), view.document.getText());
+    // The tag is laid out as EMF saves it: wrapped once the line is longer than 80 columns.
+    assert.match(view.document.getText(), /name="book" lowerBound="1" upperBound="-1"\s+eType="#\/\/Book"/);
     await waitFor("the new multiplicity", () =>
       view.current!.classifiers.find((c) => c.name === "Loan")?.references.some((r) => r.name === "book" && r.upper === -1),
     );
@@ -754,6 +757,48 @@ describe("Oxychloride", () => {
       const models = await api.projects.getChildren(categories.find((c) => c.category?.id === "models"));
       // Wherever they are in the folder (the manifest names where new ones go).
       assert.ok(models.some((f) => f.uri!.fsPath.endsWith("university.hutn")), JSON.stringify(models));
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    });
+
+    it("imports Eclipse projects with their target platform", async () => {
+      const repo = path.join(folder(), "eclipse/repo");
+      const manifest = await vscode.commands.executeCommand<vscode.Uri>("oxychloride.importEclipseProjects", vscode.Uri.file(repo), {
+        targetPlatform: ["../target/plugins"],
+      });
+      assert.strictEqual(manifest?.fsPath, path.join(repo, "oxychloride.json"));
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(manifest.fsPath, "utf8")).targetPlatform, ["../target/plugins"]);
+      await waitFor("the Eclipse project", () => api.projects.platform?.info?.projects.some((p) => p.name === "org.example.shop") ?? false);
+      const info = api.projects.platform!.info!;
+      assert.deepStrictEqual(info.missing, []);
+      assert.deepStrictEqual(info.modelExtensions, ["shop"]);
+      const shop = api.projects.projects.find((p) => p.name === "org.example.shop")!;
+      const categories = await api.projects.getChildren({ kind: "project", project: shop });
+      assert.deepStrictEqual(categories.map((c) => c.category?.id ?? c.kind), ["eclipseProjects", "metamodels", "constraints", "models", "henshin", "qvt"]);
+      const bundles = await api.projects.getChildren(categories[0]);
+      assert.deepStrictEqual(bundles.map((b) => b.bundle?.name ?? b.kind), ["org.example.shop"]);
+      const models = await api.projects.getChildren(categories.find((c) => c.category?.id === "models"));
+      assert.deepStrictEqual(models.map((m) => path.relative(repo, m.uri!.fsPath).split(path.sep).join("/")), [
+        "org.example.shop/instances/my.shop",
+        "org.example.shop/library/standard.shop",
+      ]);
+
+      // A model of the bundle's extension is XML and checked with the OCL of the .ecore file.
+      const model = vscode.Uri.file(path.join(repo, "org.example.shop/instances/my.shop"));
+      await vscode.window.showTextDocument(model);
+      await waitFor("the model as XML", () => vscode.window.activeTextEditor?.document.languageId === "xml");
+      await waitFor("the violated invariant", () => errors(model).some((d) => d.message.includes("'positivePrice'")));
+      assert.strictEqual(errors(model).length, 1, JSON.stringify(errors(model)));
+
+      // The OCL of the .ecore file is checked where it is in the file.
+      const ecore = vscode.Uri.file(path.join(repo, "org.example.shop/model/shop.ecore"));
+      const doc = await vscode.workspace.openTextDocument(ecore);
+      const editor = await vscode.window.showTextDocument(doc);
+      const at = doc.getText().indexOf("self.price") + "self.".length;
+      await editor.edit((e) => e.replace(new vscode.Range(doc.positionAt(at), doc.positionAt(at + "price".length)), "prize"));
+      await waitFor("the OCL problem", () => errors(ecore).some((d) => d.message.includes("prize")));
+      const problem = errors(ecore).find((d) => d.message.includes("prize"))!;
+      assert.deepStrictEqual(problem.range.start, doc.positionAt(at));
+      await vscode.commands.executeCommand("workbench.action.files.revert");
       await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     });
   });

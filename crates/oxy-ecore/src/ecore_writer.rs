@@ -289,10 +289,51 @@ pub fn href(mm: &Metamodel, resource: usize, target: ElementRef) -> String {
     let ns_uri = &mm.package(root).ns_uri;
     let target_uri = &mm.resources()[target_resource].uri;
     let own_uri = &mm.resources()[resource].uri;
-    if is_ecore_file(target_uri) && is_file(own_uri) && ns_uri != ECORE_NS_URI {
+    if ns_uri == ECORE_NS_URI {
+        return format!("{ns_uri}#{fragment}");
+    }
+    // Resources known by `platform:` URIs (Eclipse projects, bundles) refer to each other as
+    // EMF's platform-aware URI handler writes it.
+    let own_platform = platform_uri(mm, resource, true);
+    if let Some(target) = platform_uri(mm, target_resource, false) {
+        return match own_platform {
+            Some(own) => format!("{}#{fragment}", deresolve_platform(&own, &target)),
+            None => format!("{target}#{fragment}"),
+        };
+    }
+    if is_ecore_file(target_uri) && is_file(own_uri) {
         return format!("{}#{fragment}", relative_path(own_uri, target_uri));
     }
     format!("{ns_uri}#{fragment}")
+}
+
+/// The `platform:` URI a resource is known by: for the resource being written its
+/// `platform:/resource` URI if it has one (an Eclipse project's file), else the first (the one
+/// it was referred to by).
+fn platform_uri(mm: &Metamodel, resource: usize, own: bool) -> Option<String> {
+    let r = &mm.resources()[resource];
+    let mut uris = std::iter::once(&r.uri).chain(&r.aliases).filter(|u| u.starts_with("platform:/"));
+    let first = uris.clone().next().cloned();
+    if own && let Some(workspace) = uris.find(|u| u.starts_with("platform:/resource/")) {
+        return Some(workspace.clone());
+    }
+    first
+}
+
+/// `target` relative to `base`, as EMF's `URIHandlerImpl.PlatformSchemeAware` deresolves it:
+/// relative if both are `platform:/resource` or both `platform:/plugin` URIs, else absolute.
+pub fn deresolve_platform(base: &str, target: &str) -> String {
+    let segments =
+        |u: &str| -> Vec<String> { u.trim_start_matches("platform:/").split('/').map(str::to_string).collect() };
+    let (b, t) = (segments(base), segments(target));
+    if b.first() != t.first() || b.len() < 2 || t.len() < 2 {
+        return target.to_string();
+    }
+    let dir = &b[..b.len() - 1];
+    let common = dir.iter().zip(&t[..t.len() - 1]).take_while(|(x, y)| x == y).count();
+    let mut out: Vec<String> = vec!["..".to_string(); dir.len() - common];
+    out.extend(t[common..].iter().cloned());
+    out.join("/")
 }
 
 fn is_file(uri: &str) -> bool {
@@ -325,5 +366,15 @@ mod tests {
         assert_eq!(relative_path("/a/b/x.ecore", "/a/b/y.ecore"), "y.ecore");
         assert_eq!(relative_path("/a/b/x.ecore", "/a/c/y.ecore"), "../c/y.ecore");
         assert_eq!(relative_path("x.ecore", "y.ecore"), "y.ecore");
+    }
+
+    #[test]
+    fn platform_uris_as_emf_deresolves_them() {
+        let stoex = "platform:/plugin/de.uka.ipd.sdq.stoex/model/stoex.ecore";
+        let units = "platform:/plugin/de.uka.ipd.sdq.units/model/Units.ecore";
+        assert_eq!(deresolve_platform(stoex, units), "../../de.uka.ipd.sdq.units/model/Units.ecore");
+        let pcm = "platform:/resource/org.palladiosimulator.pcm/model/pcm.ecore";
+        assert_eq!(deresolve_platform(pcm, stoex), stoex);
+        assert_eq!(deresolve_platform(pcm, "platform:/resource/org.palladiosimulator.pcm/model/x.ecore"), "x.ecore");
     }
 }

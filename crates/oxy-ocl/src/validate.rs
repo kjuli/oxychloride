@@ -99,11 +99,14 @@ pub fn validate_model(
     let mut ev = Evaluator::new(mm, model, env);
     ev.set_check_contracts(contracts);
     let mut out = Validation::default();
+    // `allInstances()` ranges over the objects of the object's resource, as in Eclipse OCL,
+    // where each model is validated on its own (its extent is its resource's contents).
     for (index, inv) in env.invariants().iter().enumerate() {
         for &object in objects {
             if !mm.conforms_to(model.class_of(object), inv.context) {
                 continue;
             }
+            ev.set_extent(Some(vec![model.object(object).resource]));
             let self_value = Value::Object(object);
             let vars: Vec<(&str, Value)> =
                 inv.self_name.as_deref().map(|n| (n, self_value.clone())).into_iter().collect();
@@ -119,6 +122,7 @@ pub fn validate_model(
             out.invariants.push(ConstraintResult { invariant: index, object, status, message });
         }
     }
+    ev.set_extent(None);
     if contracts {
         check_operations(&mut ev, mm, model, env, objects, &mut out.unchecked);
         let mut seen = HashSet::new();

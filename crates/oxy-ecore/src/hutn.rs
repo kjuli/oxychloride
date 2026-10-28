@@ -1015,7 +1015,10 @@ pub fn check_multiplicities(mm: &Metamodel, model: &Model, objects: &[(ObjectId,
             }
             let count = model.get(*o, f).len() as i32;
             let m = feature.multiplicity;
-            if count < m.lower {
+            // As in EMF's validator, a required single value is there if the feature's default
+            // is (a default value literal, an enumeration's first literal, a primitive's zero).
+            let defaulted = count == 0 && m.upper == 1 && crate::model::default_value(mm, f).is_some();
+            if count < m.lower && !defaulted {
                 problems.push(Problem::warning(
                     span.clone(),
                     if m.lower == 1 {

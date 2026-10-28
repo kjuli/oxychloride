@@ -1,5 +1,6 @@
 // Runs the integration tests in a VS Code instance with the extension under development, on a
-// copy of examples/university, examples/library and examples/qvt (the tests edit and create files).
+// copy of examples/university, examples/library and examples/qvt, and of the Eclipse projects of
+// crates/oxychloride/tests/fixtures/eclipse (the tests edit and create files).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -14,6 +15,8 @@ async function main(): Promise<void> {
   for (const example of ["university", "library", "qvt"]) {
     fs.cpSync(path.resolve(extensionDevelopmentPath, "../examples", example), path.join(workspace, example), { recursive: true });
   }
+  // Eclipse projects with a target platform of jars.
+  fs.cpSync(path.resolve(extensionDevelopmentPath, "../crates/oxychloride/tests/fixtures/eclipse"), path.join(workspace, "eclipse"), { recursive: true });
   // OXYCHLORIDE_SERVER: run another language server executable (e.g. a logging wrapper).
   if (process.env.OXYCHLORIDE_SERVER) {
     fs.mkdirSync(path.join(workspace, ".vscode"));

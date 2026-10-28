@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.0"?>
+<plugin>
+   <extension point="org.eclipse.emf.ecore.generated_package">
+      <package uri="http://example.org/shop/1.0" class="org.example.shop.ShopPackage" genModel="model/shop.genmodel"/>
+   </extension>
+   <extension point="org.eclipse.emf.ecore.extension_parser">
+      <parser type="shop" class="org.example.shop.util.ShopResourceFactoryImpl"/>
+   </extension>
+   <extension point="org.eclipse.emf.ecore.uri_mapping">
+      <mapping source="pathmap://SHOP_LIBRARY/" target="platform:/plugin/org.example.shop/library/"/>
+   </extension>
+</plugin>

@@ -38,10 +38,16 @@ pub const UNSPECIFIED: i32 = -2;
 
 pub const ECORE_NS_URI: &str = "http://www.eclipse.org/emf/2002/Ecore";
 
+/// The URI of `Ecore.ecore` in an Eclipse installation (the built-in Ecore resource is known by it).
+pub const ECORE_PLATFORM_URI: &str = "platform:/plugin/org.eclipse.emf.ecore/model/Ecore.ecore";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Annotation {
     pub source: String,
     pub details: Vec<(String, String)>,
+    /// Where each detail is in the `.ecore` text it was loaded from: the byte offset of its
+    /// `<details>` tag (empty for annotations not read from XML).
+    pub offsets: Vec<usize>,
 }
 
 impl Annotation {
@@ -274,6 +280,9 @@ impl Metamodel {
         let mut mm = Metamodel::empty();
         crate::ecore_loader::load_str(&mut mm, crate::builtin::ECORE_ECORE, ECORE_NS_URI)
             .expect("the built-in Ecore metamodel must load");
+        // Where `.ecore` files find Ecore, as in an Eclipse installation.
+        let ecore = mm.package(mm.ecore_package()).resource;
+        mm.add_resource_alias(ecore, ECORE_PLATFORM_URI);
         mm.eobject = mm.find_classifier_in(mm.ecore_package(), "EObject");
         mm
     }
@@ -334,6 +343,11 @@ impl Metamodel {
     /// Top-level packages that were loaded by the user (everything but Ecore itself).
     pub fn user_root_packages(&self) -> impl Iterator<Item = PackageId> + '_ {
         self.root_packages().filter(|p| self.package(*p).ns_uri != ECORE_NS_URI)
+    }
+
+    /// The packages of a resource, subpackages included.
+    pub fn packages_of_resource(&self, resource: usize) -> impl Iterator<Item = PackageId> + '_ {
+        (0..self.packages.len() as u32).map(PackageId).filter(move |p| self.package(*p).resource == resource)
     }
 
     pub fn ecore_package(&self) -> PackageId {

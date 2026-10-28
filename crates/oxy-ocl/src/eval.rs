@@ -126,6 +126,8 @@ pub struct Evaluator<'a> {
     /// Whether operation calls evaluate the operation's pre- and postconditions.
     check_contracts: bool,
     contract_checks: Vec<ContractCheck>,
+    /// The resources `allInstances()` ranges over (`None`: all).
+    extent: Option<Vec<usize>>,
 }
 
 macro_rules! strict {
@@ -162,6 +164,7 @@ impl<'a> Evaluator<'a> {
             package: None,
             check_contracts: true,
             contract_checks: Vec::new(),
+            extent: None,
         }
     }
 
@@ -227,6 +230,12 @@ impl<'a> Evaluator<'a> {
 
     /// Turns the evaluation of pre- and postconditions at operation calls on or off (it is on
     /// by default).
+    /// Restricts `allInstances()` to the objects of some resources (`None`: all), like Eclipse
+    /// OCL, where it ranges over the resource of the object being validated.
+    pub fn set_extent(&mut self, resources: Option<Vec<usize>>) {
+        self.extent = resources;
+    }
+
     pub fn set_check_contracts(&mut self, on: bool) {
         self.check_contracts = on;
     }
@@ -973,10 +982,13 @@ impl<'a> Evaluator<'a> {
             return None;
         }
         Some(match t {
-            Type::Classifier(c) if mm.is_class(*c) => Value::collection(
-                CollectionKind::Set,
-                self.model.instances_of(mm, *c).into_iter().map(Value::Object).collect(),
-            ),
+            Type::Classifier(c) if mm.is_class(*c) => {
+                let mut instances = self.model.instances_of(mm, *c);
+                if let Some(extent) = &self.extent {
+                    instances.retain(|o| extent.contains(&self.model.object(*o).resource));
+                }
+                Value::collection(CollectionKind::Set, instances.into_iter().map(Value::Object).collect())
+            }
             Type::Classifier(c) if mm.is_enum(*c) => Value::collection(
                 CollectionKind::Set,
                 (0..mm.enum_literals(*c).len() as u32).map(|i| Value::Enum(*c, i)).collect(),

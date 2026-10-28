@@ -17,6 +17,7 @@ import { documentName, reveal, uriOf } from "./documents";
 import { HenshinFiles } from "./henshinFiles";
 import { HenshinPairs, counterpart } from "./henshinPairs";
 import { MODEL_FILES, QVT_FILES, QvtRunner, type QvtRunOptions } from "./qvt";
+import { EclipsePlatform, type ImportOptions } from "./platform";
 import { Projects, fileOf, type NewDocumentOptions, type NewProjectOptions, type ProjectNode } from "./projects";
 import { PackageRegistry, type RegistryNode } from "./registry";
 import { RuleDiagramEditor, openRuleDiagram, type RuleDiagramView } from "./ruleDiagram";
@@ -77,6 +78,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
   // `ready` is defined below: the language server starts once the projects are read.
   const projects = new Projects(engine, creator, () => ready);
   const registry = new PackageRegistry(engine, projects);
+  const platform = new EclipsePlatform(engine, projects);
+  projects.platform = platform;
   const codeGenerator = new CodeGenerator(engine, context.workspaceState, output, (near) => projects.codegenDefaults(near));
   const schemas = new SchemaRegistry(engine, context, output);
   const oclConsole = new OclConsole(engine, () => chooseContext(models.models));
@@ -104,18 +107,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
           { scheme: "file", language },
           { scheme: "untitled", language },
         ]),
-        { scheme: "file", language: "xml", pattern: "**/*.xmi" },
-        { scheme: "file", language: "xml", pattern: "**/*.henshin" },
+        // XML: `.xmi` models, `.henshin` files, `.ecore` metamodels and models of extensions
+        // bundles register (`.repository`, …); the server takes those it knows.
+        { scheme: "file", language: "xml" },
       ],
       // Registered metamodels may be Ecore XML under other extensions.
       synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{ocl,oclinecore,ecore,xml,henshin_text,henshin,qvto,qvtr}") },
       // The package registry is there before the server loads the workspace folders.
-      initializationOptions: () => ({ registry: registry.entries() }),
+      initializationOptions: () => ({ registry: registry.entries(), platform: platform.settings() }),
       outputChannel: output,
     };
     client = new LanguageClient("oxychloride", "Oxychloride", serverOptions, clientOptions);
     client.onNotification("oxychloride/workspaceChanged", () => void refresh());
     await client.start();
+    // The engine's state of the Eclipse projects (the server set it at the start).
+    await platform.sync();
     await refresh();
   };
 
@@ -155,9 +161,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("oxychloride.xmlSchemas")) void schemas.update();
       if (e.affectsConfiguration("oxychloride.registry")) void registry.sync();
+      if (e.affectsConfiguration("oxychloride.targetPlatform")) void platform.sync();
     }),
     projects,
-    projects.onDidChangeProjects(() => void registry.sync()),
+    projects.onDidChangeProjects(() => void registry.sync().then(() => platform.sync())),
+    platform,
+    platform.onDidChange(() => projects.refresh()),
     vscode.window.registerTreeDataProvider("oxychloride.projects", projects),
     { dispose: () => void schemas.dispose() },
     MetamodelDiagramEditor.register(context, engine, ready.then(() => undefined)),
@@ -222,6 +231,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Oxychl
     projects.newProject(arg instanceof vscode.Uri ? { parent: arg } : (arg ?? {})),
   );
   register("oxychloride.initProject", (folder?: vscode.Uri) => projects.initProject(folder instanceof vscode.Uri ? folder : undefined));
+  register("oxychloride.importEclipseProjects", (folder?: vscode.Uri, options?: ImportOptions) =>
+    platform.importProjects(folder instanceof vscode.Uri ? folder : undefined, options),
+  );
   // A category or project of the view (or none: the project of the active editor); from code,
   // the second argument answers the questions.
   const newDocument = (kind: "metamodels" | "constraints" | "models" | "henshin" | "qvt") => (node?: ProjectNode, options?: NewDocumentOptions) =>

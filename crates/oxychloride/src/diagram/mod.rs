@@ -87,7 +87,7 @@ impl Workspace {
             let doc = ecore::Doc::new(&text, &file.root);
             let cx = Context::new(&file.mm, file.resource, &text);
             let (edits, element) = doc.edit(&cx, edit)?;
-            (edits, element, text)
+            (ecore::emf_layout(&text, edits)?, element, text)
         } else {
             let built = self.oclinecore_document(name).ok_or_else(|| not_a_metamodel(name))?;
             let text = self.document_text(name).unwrap_or_default();

@@ -9,8 +9,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use oxychloride::{
-    Diagnostic, Language, MetamodelFormat, NewProjectRequest, ObjectRef, Project, RegistryEntry, Severity,
-    ValidateOptions, Workspace,
+    Diagnostic, ImportEclipseRequest, Language, MetamodelFormat, NewProjectRequest, ObjectRef, Project, RegistryEntry,
+    Severity, ValidateOptions, Workspace,
 };
 
 use render::Renderer;
@@ -149,6 +149,30 @@ enum Command {
         /// Replace files that exist.
         #[arg(long)]
         force: bool,
+    },
+    /// Make a folder with Eclipse projects — plug-ins with metamodels, such as PCM's — a
+    /// modeling project: write its manifest, with the target platform that has the bundles the
+    /// projects require. `platform:/resource` and `platform:/plugin` URIs, the packages the
+    /// projects register (`plugin.xml`), their URI mappings and model file extensions then work
+    /// as in Eclipse (`oxy check` in the folder checks it all).
+    Import {
+        /// The folder (default: the current directory).
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// The project's name (default: the Eclipse project's, or the folder's).
+        #[arg(long)]
+        name: Option<String>,
+        /// The target platform: an Eclipse installation, a folder of bundles (`plugins`, a
+        /// bundle pool), bundles (jars, folders) or folders with bundles further down (default:
+        /// the target platform found on this machine that has most of the required bundles).
+        #[arg(long = "target-platform", short = 't', value_name = "PATH")]
+        target_platform: Vec<String>,
+        /// Write no target platform.
+        #[arg(long, conflicts_with = "target_platform")]
+        no_target_platform: bool,
+        /// Print the manifest instead of writing it.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Validate models: evaluate the invariants of OCL documents and of the metamodels, and
     /// check the pre- and postconditions of operations.
@@ -497,6 +521,88 @@ fn run(command: Command, format: Format, r: &Renderer) -> Result<bool, String> {
                     paths.len(),
                     project.package,
                     project.ns_uri
+                );
+            }
+            Ok(true)
+        }
+        Command::Import { dir, name, target_platform, no_target_platform, dry_run } => {
+            let mut chosen = None;
+            let target_platform = if no_target_platform || !target_platform.is_empty() {
+                target_platform
+            } else {
+                let scan = oxychloride::platform::scan(&dir);
+                match scan.targets.into_iter().find(|t| t.provides > 0) {
+                    Some(t) => {
+                        let location = oxychloride::platform::contract_home(&t.location);
+                        chosen = Some(format!(
+                            "{location} ({}, {} of {} required bundles)",
+                            t.kind,
+                            t.provides,
+                            scan.required.len()
+                        ));
+                        vec![location]
+                    }
+                    None => Vec::new(),
+                }
+            };
+            let request = ImportEclipseRequest { folder: dir.to_string_lossy().into_owned(), name, target_platform };
+            let imported = Workspace::import_eclipse_projects(&request).map_err(|e| e.to_string())?;
+            let manifest = dir.join(&imported.manifest.path);
+            if !dry_run {
+                std::fs::write(&manifest, &imported.manifest.text)
+                    .map_err(|e| format!("cannot write {}: {e}", manifest.display()))?;
+            }
+            if format == Format::Json {
+                print_json(&imported);
+                return Ok(true);
+            }
+            let platform = &imported.platform;
+            let root = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+            for p in &platform.projects {
+                let version = p.version.as_deref().map(|v| format!(" {v}")).unwrap_or_default();
+                let location = Path::new(&p.location).strip_prefix(&root).unwrap_or(Path::new(&p.location));
+                let location = if location.as_os_str().is_empty() { Path::new(".") } else { location };
+                println!("  {}{}  {}", r.bold(&p.name), r.dim(&version), r.dim(&location.to_string_lossy()));
+                for package in &p.packages {
+                    let state = match (&package.status, &package.message) {
+                        (oxychloride::RegistryStatus::Loaded, _) => r.ok("loaded"),
+                        (_, Some(m)) => r.warning(m),
+                        (s, None) => r.warning(&format!("{s:?}")),
+                    };
+                    println!("    package {}  {state}", package.ns_uri);
+                }
+                if !p.model_extensions.is_empty() {
+                    println!("    models  .{}", p.model_extensions.join(", ."));
+                }
+            }
+            match &chosen {
+                Some(t) => println!("{} target platform {t}", r.dim("found")),
+                None if platform.settings.target.is_empty() => println!("{} no target platform", r.dim("note")),
+                None => {}
+            }
+            for t in &platform.target {
+                if let Some(p) = &t.problem {
+                    println!("{}: {p}", r.warning("warning"));
+                }
+            }
+            println!(
+                "{} {} of {} required bundles found",
+                r.dim("bundles"),
+                platform.required.len(),
+                platform.required.len() + platform.missing.len()
+            );
+            for m in &platform.missing {
+                println!("  {} {} (required by {})", r.warning("missing"), m.name, m.required_by);
+            }
+            if dry_run {
+                print!("{}", imported.manifest.text);
+            } else {
+                println!(
+                    "{} wrote {} ({} Eclipse project{})",
+                    r.ok("✓"),
+                    manifest.display(),
+                    platform.projects.len(),
+                    if platform.projects.len() == 1 { "" } else { "s" }
                 );
             }
             Ok(true)

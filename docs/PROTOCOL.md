@@ -58,17 +58,50 @@ type RegistryInfo = {
 type RegisteredResource = { uri: string; aliases?: string[]; packages: { name: string; nsUri: string }[] };
 ```
 
+### `setPlatform` `{workspace, target}` → `PlatformInfo` · `platform` → `PlatformInfo`
+Eclipse projects and their target platform, so that a folder of plug-ins (such as PCM's) means what it means in an Eclipse workspace (see [PROJECTS.md](PROJECTS.md#eclipse-projects)). `workspace` are folders searched for Eclipse projects (folders with a `.project` or a `META-INF/MANIFEST.MF`); `target` are bundles (jars, folders), folders of bundles (`plugins`, bundle pools), Eclipse installations or folders with bundles further down; `~/` is the home folder. Then:
+
+- `platform:/resource/<project>/…` is a file of the project named so in its `.project`; `platform:/plugin/<bundle>/…` is a file of the project with that `Bundle-SymbolicName`, else of the target platform's newest version of the bundle — in a jar, read as `archive:file:/…/b_1.0.jar!/…` (the URI it then has);
+- the packages bundles register (`org.eclipse.emf.ecore.generated_package` through their genmodel, `dynamic_package`) are found by nsURI: the projects' are loaded with the workspace (they are its metamodels), the target platform's when something refers to them;
+- `org.eclipse.emf.ecore.uri_mapping`s map URIs (`pathmap://PCM_MODELS/`), and the file types of `extension_parser`s are models (`modelExtensions`);
+- the target bundles the projects require (`Require-Bundle`, transitively) are read; those found nowhere are `missing` (optional ones, the OSGi framework's and EMF's own are not).
+
+`setPlatform` reloads metamodels, models and document imports (unless both the old and the new settings are empty); it and `platform` return:
+
+```ts
+type PlatformInfo = {
+  settings: { workspace: string[]; target: string[] };
+  projects: EclipseBundleInfo[];             // the Eclipse projects
+  required: EclipseBundleInfo[];             // the target bundles they require
+  missing: { name: string; requiredBy: string }[];
+  target: { location: string; bundles: number; problem?: string }[];
+  modelExtensions: string[];                 // e.g. ["repository", "system", …]
+};
+type EclipseBundleInfo = {
+  name: string; project?: string; symbolicName?: string; version?: string;
+  location: string;                          // its folder or jar
+  packages: { nsUri: string; location?: string; status: "loaded" | "folder" | "missing" | "error"; message?: string }[];
+  requires: { name: string; optional: boolean; location?: string }[];
+  uriMappings?: { source: string; target: string }[]; modelExtensions?: string[]; problems?: string[];
+};
+```
+
+### `scanEclipseProjects` `{folder}` → `{projects, required, targets}` · `importEclipseProjects` `{folder, name?, targetPlatform}` → `{manifest, platform}`
+`scanEclipseProjects` lists the Eclipse projects in a folder (`EclipseBundleInfo`s), the bundles they require that are not among them, and the target platforms found on this machine (`{location, kind, bundles, provides}`, the ones that have most of those bundles first): Oomph's bundle pools and installations, the PDE target platforms of their recent workspaces, `~/.p2/pool`, Eclipse applications. `importEclipseProjects` returns the manifest (`{path: "oxychloride.json", text}`, an existing one's other fields kept) that makes the folder a modeling project of them with `targetPlatform`, and the `PlatformInfo` of that; it fails (`-32602`) if there are no Eclipse projects. Neither writes files; `oxy import` and the extension's *Import Eclipse Projects…* write the manifest.
+
 Diagnostics about metamodels that cannot be found name the URI (`cannot find imported metamodel '…'`, `unknown package nsURI '…'`, `no metamodel with nsURI '…'`, `cannot resolve reference '…#…'`, and for QVT model types and imports `cannot find the metamodel '…'`), so clients can offer to register a file for it.
 
 ### `reset` → `null` · `clearModels` → `null` · `reload` → `{problems: [Diagnostic]}`
 `reset` empties the workspace; `clearModels` removes instance models only; `reload` re-reads all metamodels and models from their sources and re-resolves document imports.
 
 ### `openDocument` `{name, text, language?}` → `{diagnostics: [Diagnostic], language}`
-Adds or replaces a document. `language` is `"ocl"` (Complete OCL), `"oclinecore"` (a metamodel), `"hutn"` or `"xmi"` (a model), `"henshin"` (graph transformation rules in Henshin's textual syntax), `"henshinModel"` (the same as a `.henshin` model of Henshin's editors, see [Transformations](#transformations-henshin)), `"qvto"` or `"qvtr"` (a QVT transformation, see [QVT](#qvt-transformations)); by default it follows the extension of `name` (`.oclinecore`, `.hutn`, `.xmi`, `.henshin_text`, `.henshin`, `.qvto`, `.qvtr`, else Complete OCL). Use the file path as `name`: relative `import` statements are resolved against it and the imported `.ecore` files are loaded (an import of an `.oclinecore` file must name an open document).
+Adds or replaces a document. `language` is `"ocl"` (Complete OCL), `"oclinecore"` (a metamodel), `"hutn"` or `"xmi"` (a model), `"henshin"` (graph transformation rules in Henshin's textual syntax), `"henshinModel"` (the same as a `.henshin` model of Henshin's editors, see [Transformations](#transformations-henshin)), `"qvto"` or `"qvtr"` (a QVT transformation, see [QVT](#qvt-transformations)), `"ecore"` (an `.ecore` file edited as text); by default it follows the extension of `name` (`.oclinecore`, `.hutn`, `.xmi`, `.ecore`, `.henshin_text`, `.henshin`, `.qvto`, `.qvtr`, else Complete OCL). Use the file path as `name`: relative `import` statements are resolved against it and the imported `.ecore` files are loaded (an import of an `.oclinecore` file must name an open document).
 
 An OCLinEcore document's packages become part of the workspace's metamodels (they show in `packages`); a HUTN document's objects become a model resource named `name` (they show in `models`, can be `context` objects and are validated). Both are rebuilt on every change, together with whatever depends on them. The diagnostics of a HUTN document include, once it has no errors, the invariants and pre-/postconditions its objects violate (errors) or that cannot be evaluated (warnings), located on the objects.
 
-An XMI document is a model edited as text (unlike `loadModel`, which loads a file once): it is reloaded on every change, metamodels named in its `xsi:schemaLocation` are loaded if they are `.ecore` files (others are found by nsURI, e.g. packages of OCLinEcore documents), and its diagnostics are those of a HUTN document — load problems (malformed XML, unknown classes or features, bad values, unresolved references) as errors, unset required features as warnings, then constraint violations — located on the elements' tag names. A document that cannot be loaded at all is an empty model resource.
+An XMI document is a model edited as text (unlike `loadModel`, which loads a file once): it is reloaded on every change, metamodels named in its `xsi:schemaLocation` are loaded if they are `.ecore` files (others are found by nsURI, e.g. packages of OCLinEcore documents), and its diagnostics are those of a HUTN document — load problems (malformed XML, unknown classes or features, bad values, unresolved references) as errors, unset required features as warnings, then constraint violations — located on the elements' tag names. A document that cannot be loaded at all is an empty model resource. Files of the model extensions Eclipse bundles register (`modelExtensions` of `setPlatform`, e.g. `.repository`) are XMI documents.
+
+An Ecore document is an `.ecore` file open in an editor: its text stands for the file wherever the file is read (the file it names, by path, `platform:` URI or registered nsURI), and every change reloads the metamodels. Its diagnostics are the load problems of the file (unresolved references, …) and the problems of the OCL in its annotations (`http://www.eclipse.org/emf/2002/Ecore/OCL`, `…/OCL/Pivot`, `…/OCL/LPG`: invariants, derivations, bodies, pre- and postconditions), located in the `value` of their `<details>` (through XML escapes such as `&gt;`); `hover` and `complete` work in those values too.
 
 ### `closeDocument` `{name}` → `{closed: boolean}`
 
@@ -206,7 +239,7 @@ The text edits that make `edit` in the document (as for `metamodelDiagram`); the
 | `update` | `element`, `properties: {name?, isAbstract?, isInterface?, type?, lower?, upper?, containment?, ordered?, unique?, derived?, changeable?, transient?, volatile?, isId?, parameters?}` | absent properties stay; `type: ""` removes an operation's result type |
 | `delete` | `elements: [id]` | also the references typed by deleted classes, and the supertypes and opposites that name deleted elements |
 
-New elements are written as the document's syntax writes them (OCLinEcore like the printer, `.ecore` files like EMF, with the document's indentation); changed elements are changed in place (a name, type, multiplicity, attribute or qualifier list), so the rest of the text — its layout, comments and OCL — stays as it is. Renaming updates the references to the element in the document (types, supertypes, opposites, `#//…` fragments), not in OCL expressions or other documents. Deleting removes whole lines where the element has them to itself, in OCLinEcore with the comment lines right above it. Edits that make the metamodel invalid (a name that is taken, an attribute typed by a class, a reference typed by a data type, a multiplicity without a type) are refused with `-32602`; unknown elements are `-32001`.
+New elements are written as the document's syntax writes them (OCLinEcore like the printer, `.ecore` files like EMF, with the document's indentation). In `.ecore` files, the start tags an edit touches are laid out as EMF saves them — attributes in the order of their features, continued on a new line two levels deeper once the line is longer than 80 columns — with the file's line breaks (CRLF or LF), and references to other files are written as EMF writes them (`platform:` URIs relative only within a project or bundle, packages of the engine's Ecore by nsURI): a file EMF wrote stays as EMF would save it; changed elements are changed in place (a name, type, multiplicity, attribute or qualifier list), so the rest of the text — its layout, comments and OCL — stays as it is. Renaming updates the references to the element in the document (types, supertypes, opposites, `#//…` fragments), not in OCL expressions or other documents. Deleting removes whole lines where the element has them to itself, in OCLinEcore with the comment lines right above it. Edits that make the metamodel invalid (a name that is taken, an attribute typed by a class, a reference typed by a data type, a multiplicity without a type) are refused with `-32602`; unknown elements are `-32001`.
 
 ## Transformations (Henshin)
 
@@ -354,8 +387,9 @@ The text edits that make a diagram edit (the document is not changed). `edit` is
 
 `oxy lsp` speaks the Language Server Protocol on stdio (`--stdio` is accepted and ignored). It keeps one workspace:
 
-- Documents open in the editor (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text` with language id `henshin`, `.qvto`, `.qvtr`; `.xmi` and `.henshin` with language id `xml`) are workspace documents named by their path; unsaved documents are named by their URI, their language comes from the language id. The `.oclinecore`, `.ocl`, `.henshin_text`, `.henshin`, `.qvto` and `.qvtr` files of the workspace folders are loaded too, from disk while they are not open (and reloaded on `workspace/didChangeWatchedFiles`), so models find their metamodels and constraints, and `qvtTransformations` the transformations of the workspace. A changed `.ecore` file that is loaded (imported, named by a model, or registered) reloads all metamodels.
-- `initializationOptions.registry` (`[RegistryEntry]`) sets the package registry (see `setRegistry`) before the workspace folders are loaded.
+- Documents open in the editor (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text` with language id `henshin`, `.qvto`, `.qvtr`; `.xmi`, `.ecore` and `.henshin` with language id `xml`) are workspace documents named by their path; unsaved documents are named by their URI, their language comes from the language id. The `.oclinecore`, `.ocl`, `.henshin_text`, `.henshin`, `.qvto` and `.qvtr` files of the workspace folders are loaded too, from disk while they are not open (and reloaded on `workspace/didChangeWatchedFiles`), so models find their metamodels and constraints, and `qvtTransformations` the transformations of the workspace. A changed `.ecore` file that is loaded (imported, named by a model, or registered) reloads all metamodels.
+- `initializationOptions.registry` (`[RegistryEntry]`) sets the package registry (see `setRegistry`), and `initializationOptions.platform` (`{workspace, target}`) the Eclipse projects and their target platform (see `setPlatform`), before the workspace folders are loaded.
+- `.ecore` files open in the editor (language id `xml`) are Ecore documents, and files of the model extensions that Eclipse bundles register (`.repository`, … with any language id) XMI documents — also those opened before `setPlatform` named the extension.
 - Once changes settle (200 ms), the diagnostics of all documents are published (`source: "ocl"`); they depend on each other, e.g. editing a metamodel re-checks its models.
 - `textDocument/hover` and `textDocument/completion` (LSP positions count UTF-16 code units; they are converted).
 - `oxychloride/rpc` `{method, params}` → the result of any method above. Its positions are the engine's (Unicode scalar columns), and document names are paths (or URIs of unsaved documents).
@@ -372,10 +406,11 @@ type Diagnostic = {
   message: string;
   source: string;  // document name, or "library.ecore: library::Book::SufficientCopies"
   origin: { kind: "document"; name: string }
-        | { kind: "ecore"; resource: string; element: string; key: string }
+        | { kind: "ecore"; resource: string; element: string; key: string; location?: Range }
         | { kind: "expression" }
         | { kind: "file"; path: string };
-  range: Range;    // for "ecore" origins: relative to the annotation's expression text
+  range: Range;    // for "ecore" origins: relative to the annotation's expression text; `location`:
+                   // where that text is in the resource's file, when known
 };
 ```
 

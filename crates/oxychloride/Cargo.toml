@@ -14,3 +14,4 @@ oxy-codegen.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 indexmap.workspace = true
+miniz_oxide.workspace = true

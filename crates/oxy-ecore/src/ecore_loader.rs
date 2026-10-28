@@ -62,7 +62,41 @@ pub fn load_file_with(
 
 /// Loads an `.ecore` document, using `fetch` to obtain referenced resources.
 pub fn load_with(mm: &mut Metamodel, text: &str, uri: &str, fetch: &mut Fetch<'_>) -> Result<EcoreLoad, LoadError> {
+    load_as(mm, text, uri, &[], fetch)
+}
+
+/// Loads an `.ecore` file that is also known by the (logical) URIs `logical`, e.g.
+/// `platform:/resource/project/model/a.ecore`, using `fetch` to obtain referenced resources.
+pub fn load_file_as(
+    mm: &mut Metamodel,
+    path: impl AsRef<Path>,
+    logical: &[String],
+    fetch: &mut Fetch<'_>,
+) -> Result<EcoreLoad, LoadError> {
+    let uri = canonical_uri(path.as_ref());
+    if mm.resource_of_uri(&uri).is_none() {
+        let text = std::fs::read_to_string(&uri).map_err(|e| LoadError::new(&uri, format!("cannot read file: {e}")))?;
+        return load_as(mm, &text, &uri, logical, fetch);
+    }
+    load_as(mm, "", &uri, logical, fetch)
+}
+
+/// Loads an `.ecore` document read from `uri` that is also known by the (logical) URIs
+/// `logical` — those its references were made with, e.g. `platform:/plugin/a/model/a.ecore`
+/// for a file read from a jar or a folder. Like EMF, which resolves the relative references of
+/// a resource against the URI it was loaded by, relative references are resolved against the
+/// logical URIs first, then against `uri`.
+pub fn load_as(
+    mm: &mut Metamodel,
+    text: &str,
+    uri: &str,
+    logical: &[String],
+    fetch: &mut Fetch<'_>,
+) -> Result<EcoreLoad, LoadError> {
     if let Some(resource) = mm.resource_of_uri(uri) {
+        for alias in logical {
+            mm.add_resource_alias(resource, alias);
+        }
         return Ok(EcoreLoad {
             resource,
             packages: mm.resources[resource].roots.clone(),
@@ -83,6 +117,9 @@ pub fn load_with(mm: &mut Metamodel, text: &str, uri: &str, fetch: &mut Fetch<'_
     }
 
     let resource = mm.add_resource(uri);
+    for alias in logical {
+        mm.add_resource_alias(resource, alias);
+    }
 
     let mut builder = Builder { mm, text, uri, resource, pending: Vec::new(), warnings: Vec::new() };
     let mut roots = Vec::new();
@@ -327,6 +364,7 @@ fn annotations(el: &Element) -> Vec<Annotation> {
                     (d.attr("key").unwrap_or_default().to_string(), value)
                 })
                 .collect(),
+            offsets: a.children_named("details").map(|d| d.offset).collect(),
         })
         .collect()
 }
@@ -398,43 +436,134 @@ fn resolve_href(
         let path = fragment.trim_start_matches('/');
         return mm.resolve_in_package(p, path);
     }
+    // EMF resolves a relative reference against the URI the resource was loaded by (e.g.
+    // `../../b/model/b.ecore` in `platform:/plugin/a/model/a.ecore`), whatever file it was read from.
+    if !has_scheme(target_uri) && !Path::new(target_uri).is_absolute() {
+        for logical in logical_uris(mm, resource) {
+            let resolved = resolve_uri(&logical, target_uri);
+            if let Some(r) =
+                mm.resource_of_uri(&resolved).or_else(|| fetch_resource(mm, &resolved, fetch, dependencies))
+            {
+                return mm.resolve_fragment(r, fragment);
+            }
+        }
+    }
     let resolved = resolve_relative(base, target_uri);
     let target_resource = match mm.resource_of_uri(&resolved) {
         Some(r) => r,
-        None => match find_by_file_name(mm, target_uri) {
-            Some(r) => r,
-            None => {
-                // `platform:/plugin/...` and `platform:/resource/...` URIs cannot be resolved
-                // without an Eclipse installation (unless `fetch` maps them); fall back to a file
-                // with the same name next to the referencing file (the usual layout when
-                // metamodels are copied together).
-                let mut candidates = vec![resolved.clone()];
-                if target_uri.starts_with("platform:") {
-                    let file = target_uri.rsplit('/').next().unwrap_or(target_uri);
-                    candidates.push(resolve_relative(base, file));
-                }
-                let (location, text) = candidates.into_iter().find_map(|c| fetch(&c))?;
-                let r = match mm.resource_of_uri(&location) {
-                    Some(r) => r,
-                    None => {
-                        let loaded = load_with(mm, &text, &location, fetch).ok()?;
-                        dependencies.push(loaded.resource);
-                        dependencies.extend(loaded.dependencies);
-                        loaded.resource
+        None => {
+            match fetch_resource(mm, &resolved, fetch, dependencies).or_else(|| find_by_file_name(mm, target_uri)) {
+                Some(r) => r,
+                None => {
+                    // `platform:/plugin/...` and `platform:/resource/...` URIs cannot be resolved
+                    // without an Eclipse installation (unless `fetch` maps them); fall back to a file
+                    // with the same name next to the referencing file (the usual layout when
+                    // metamodels are copied together).
+                    if !target_uri.starts_with("platform:") {
+                        return None;
                     }
-                };
-                if location != resolved {
+                    let file = target_uri.rsplit('/').next().unwrap_or(target_uri);
+                    let (location, text) = fetch(&resolve_relative(base, file))?;
+                    let r = match mm.resource_of_uri(&location) {
+                        Some(r) => r,
+                        None => {
+                            let loaded = load_as(mm, &text, &location, std::slice::from_ref(&resolved), fetch).ok()?;
+                            dependencies.push(loaded.resource);
+                            dependencies.extend(loaded.dependencies);
+                            loaded.resource
+                        }
+                    };
                     mm.add_resource_alias(r, &resolved);
+                    r
                 }
-                // The nsURI of a package the fetched resource defines.
-                if let Some(p) = mm.package_by_ns_uri(target_uri) {
-                    return mm.resolve_in_package(p, fragment.trim_start_matches('/'));
-                }
-                r
             }
-        },
+        }
     };
+    // The nsURI of a package the fetched resource defines.
+    if let Some(p) = mm.package_by_ns_uri(target_uri) {
+        return mm.resolve_in_package(p, fragment.trim_start_matches('/'));
+    }
     mm.resolve_fragment(target_resource, fragment)
+}
+
+/// Fetches and loads the resource `uri` refers to (known by `uri` afterwards), or finds it
+/// among the loaded ones by the location it is read from.
+fn fetch_resource(
+    mm: &mut Metamodel,
+    uri: &str,
+    fetch: &mut Fetch<'_>,
+    dependencies: &mut Vec<usize>,
+) -> Option<usize> {
+    let (location, text) = fetch(uri)?;
+    let logical: Vec<String> = (location != uri).then(|| uri.to_string()).into_iter().collect();
+    match mm.resource_of_uri(&location) {
+        Some(r) => {
+            mm.add_resource_alias(r, uri);
+            Some(r)
+        }
+        None => {
+            let loaded = load_as(mm, &text, &location, &logical, fetch).ok()?;
+            dependencies.push(loaded.resource);
+            dependencies.extend(loaded.dependencies);
+            Some(loaded.resource)
+        }
+    }
+}
+
+/// The URIs a resource is known by that stand for its location (`platform:/…`, a placeholder
+/// URI of a package registry; not the nsURIs of its packages), against which relative
+/// references are resolved before its file.
+fn logical_uris(mm: &Metamodel, resource: usize) -> Vec<String> {
+    let r = &mm.resources[resource];
+    let ns_uri = |a: &str| mm.packages_of_resource(resource).any(|p| mm.package(p).ns_uri == a);
+    r.aliases.iter().filter(|a| has_scheme(a) && !ns_uri(a)).cloned().collect()
+}
+
+/// Whether a URI starts with a scheme (`platform:`, `http:`, `archive:`; not a drive letter).
+pub fn has_scheme(uri: &str) -> bool {
+    match uri.split_once(':') {
+        Some((scheme, _)) => {
+            scheme.len() > 1
+                && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        }
+        None => false,
+    }
+}
+
+/// Resolves a relative URI reference against a hierarchical URI (`platform:/plugin/a/model/a.ecore`,
+/// `archive:file:/x.jar!/model/a.ecore`, `http://host/a/b.ecore`), removing `.` and `..`
+/// segments. The part of the base before its path (the scheme and authority, an archive's
+/// location up to `!/`) is kept.
+pub fn resolve_uri(base: &str, relative: &str) -> String {
+    if has_scheme(relative) {
+        return relative.to_string();
+    }
+    // The part that stays: an archive's location, else the scheme and the authority.
+    let root_end = if let Some(i) = base.find("!/") {
+        i + 2
+    } else if let Some(i) = base.find("://") {
+        base[i + 3..].find('/').map_or(base.len(), |j| i + 3 + j + 1)
+    } else {
+        base.find(":/").map_or(0, |i| i + 2)
+    };
+    let (root, path) = base.split_at(root_end.min(base.len()));
+    let mut segments: Vec<&str> = path.split('/').collect();
+    segments.pop(); // the base's own name
+    if relative.starts_with('/') {
+        segments.clear();
+    }
+    for segment in relative.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            s => segments.push(s),
+        }
+    }
+    let segments: Vec<&str> = segments.into_iter().filter(|s| !s.is_empty()).collect();
+    format!("{root}{}", segments.join("/"))
 }
 
 /// Matches `platform:/...` style URIs against already loaded resources by file name.
@@ -451,8 +580,11 @@ fn find_by_file_name(mm: &Metamodel, uri: &str) -> Option<usize> {
 
 /// Resolves `relative` against the location of `base`. URIs with a scheme are returned as is.
 pub fn resolve_relative(base: &str, relative: &str) -> String {
-    if relative.contains("://") || relative.starts_with("platform:") || Path::new(relative).is_absolute() {
+    if has_scheme(relative) || Path::new(relative).is_absolute() {
         return relative.to_string();
+    }
+    if has_scheme(base) {
+        return resolve_uri(base, relative);
     }
     let joined = Path::new(base).parent().unwrap_or(Path::new("")).join(relative);
     canonical_uri(&joined)

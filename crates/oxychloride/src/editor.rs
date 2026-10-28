@@ -2,6 +2,7 @@
 //! documents.
 
 use oxy_ecore::{ClassifierId, ElementRef, Metamodel};
+use oxy_ocl::env::SourceKind;
 use oxy_ocl::span::Position as OclPosition;
 use oxy_ocl::{SourceId, Type};
 
@@ -160,6 +161,7 @@ impl Workspace {
             Language::Qvto | Language::Qvtr => return self.hover_qvt(document, text, offset),
             // XMI is XML: the XML tooling (with the generated schemas) covers it.
             Language::Xmi => return None,
+            Language::Ecore => return self.hover_ecore(document, text, offset),
             Language::Ocl | Language::OclInEcore => {}
         }
         let compiled = self.compile(true, Some(&[document.to_string()]));
@@ -228,10 +230,89 @@ impl Workspace {
             }
             Language::Henshin => self.complete_henshin(text, word_start),
             Language::Qvto | Language::Qvtr => self.complete_qvt(document, text, word_start, language),
+            Language::Ecore => {
+                let compiled = self.compile(true, Some(&[]));
+                let (src, at, _) = self.embedded_at(&compiled, document, text, offset)?;
+                let source = compiled.env.source(src);
+                let start = word_start_in(&source.text, at);
+                let scope = self.embedded_scope(&compiled.env, src);
+                let items = self.ocl_items(&compiled, src, &source.text, start, &scope);
+                // Identifiers are written as they are: the word starts as far before the cursor.
+                return Some(finish_completion(text, offset - (at - start), offset, items));
+            }
             // `.henshin` files are XML: they are edited as rule diagrams.
             Language::Xmi | Language::HenshinModel => return None,
         };
         Some(finish_completion(text, word_start, offset, items))
+    }
+
+    /// The OCL embedded in an open `.ecore` document at `offset` (in the `value` of an
+    /// annotation's `<details>`): its source, the offset in the source's (unescaped) text, and
+    /// the offset of the `<details>` tag.
+    fn embedded_at(
+        &self,
+        compiled: &Compiled,
+        document: &str,
+        text: &str,
+        offset: usize,
+    ) -> Option<(SourceId, usize, usize)> {
+        let uri = crate::ecore_documents::ecore_document_uri(document);
+        compiled.env.sources().find_map(|(id, source)| match &source.kind {
+            SourceKind::Annotation { resource, offset: Some(tag), .. } if *resource == uri => {
+                crate::ecore_documents::value_offset(text, *tag, offset).map(|at| (id, at, *tag))
+            }
+            _ => None,
+        })
+    }
+
+    /// The type of the OCL expression at `offset` in an `.ecore` document's annotations.
+    fn hover_ecore(&self, document: &str, text: &str, offset: usize) -> Option<HoverInfo> {
+        let compiled = self.compile(true, Some(&[]));
+        let (src, at, tag) = self.embedded_at(&compiled, document, text, offset)?;
+        let (span, ty) = compiled.env.type_at(src, at as u32)?;
+        let contents = match ty {
+            Type::Meta(t) => format!("type {}", t.display(self.metamodel())),
+            t => t.display(self.metamodel()).to_string(),
+        };
+        let bytes = crate::ecore_documents::value_range(text, tag, span.start as usize..span.end as usize)?;
+        let index = oxy_ocl::LineIndex::new(text);
+        let p = |o: usize| {
+            let p = index.position(text, o);
+            Position { line: p.line, column: p.column }
+        };
+        Some(HoverInfo { range: Range { start: p(bytes.start), end: p(bytes.end) }, contents })
+    }
+
+    /// What an embedded expression may use: `self` (the class whose element it annotates), and
+    /// an operation's parameters (and `result` in postconditions).
+    fn embedded_scope(&self, env: &oxy_ocl::Environment, src: SourceId) -> OclScope {
+        if let Some(inv) = env.invariants().iter().find(|i| i.body.source == src) {
+            return OclScope { class: Some(inv.context), variables: Vec::new() };
+        }
+        if let Some(c) = env.operation_constraints().iter().find(|c| c.body.source == src) {
+            let mut variables = c.params.clone();
+            if c.kind == oxy_ocl::syntax::ast::ConstraintKind::Post {
+                variables.push(("result".to_string(), c.result.clone()));
+            }
+            return OclScope { class: Some(c.class), variables };
+        }
+        // Derivations, initial values and operation bodies: `<class>::<feature>`, `<class>::<op>()`.
+        let mm = self.metamodel();
+        let SourceKind::Annotation { element, .. } = &env.source(src).kind else {
+            return OclScope { class: None, variables: Vec::new() };
+        };
+        let (class, member) = element.rsplit_once("::").unwrap_or((element, ""));
+        let path: Vec<&str> = class.split("::").collect();
+        let class = mm.find_classifiers_qualified(&path).into_iter().next();
+        let mut variables = Vec::new();
+        if let (Some(c), Some(op)) = (class, member.strip_suffix("()")) {
+            if let Some(&o) = mm.all_operations(c).iter().find(|o| mm.operation(**o).name == op) {
+                for p in &mm.operation(o).params {
+                    variables.push((p.name.clone(), Type::of_typed(mm, p.ty, &p.multiplicity)));
+                }
+            }
+        }
+        OclScope { class, variables }
     }
 
     /// Completions inside an OCL expression: after `.`, `->` and `::`, or names in `scope`,
@@ -417,6 +498,16 @@ fn last_word(text: &str) -> &str {
 }
 
 /// Filters proposals by the typed prefix (`text[start..offset]`) and removes duplicates.
+/// Where the identifier before `offset` starts.
+fn word_start_in(text: &str, offset: usize) -> usize {
+    text[..offset]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
+        .last()
+        .map_or(offset, |(i, _)| i)
+}
+
 fn finish_completion(text: &str, start: usize, offset: usize, mut items: Vec<CompletionItem>) -> CompletionList {
     let lower = text[start..offset].to_lowercase();
     items.retain(|i| i.label.to_lowercase().starts_with(&lower));

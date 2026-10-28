@@ -328,8 +328,9 @@ fn edits_an_ecore_file() {
     f.edit(json!({"kind": "addAttribute", "owner": "library::Shelf", "name": "label", "type": "ecore::EString"}));
     assert!(f.text.contains("  <eClassifiers xsi:type=\"ecore:EClass\" name=\"Shelf\">\n    <eStructuralFeatures xsi:type=\"ecore:EAttribute\" name=\"label\" eType=\"ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString\"/>\n  </eClassifiers>"), "{}", f.text);
     f.edit(json!({"kind": "addReference", "owner": "library::Library", "name": "shelves", "type": "library::Shelf", "upper": -1, "containment": true, "opposite": "library"}));
-    assert!(f.text.contains("<eStructuralFeatures xsi:type=\"ecore:EReference\" name=\"shelves\" upperBound=\"-1\" eType=\"#//Shelf\" containment=\"true\" eOpposite=\"#//Shelf/library\"/>\n  </eClassifiers>"));
-    assert!(f.text.contains("<eStructuralFeatures xsi:type=\"ecore:EReference\" name=\"library\" eType=\"#//Library\" eOpposite=\"#//Library/shelves\"/>"));
+    // Start tags are wrapped as EMF saves them: the attributes after column 80 on a new line.
+    assert!(f.text.contains("<eStructuralFeatures xsi:type=\"ecore:EReference\" name=\"shelves\" upperBound=\"-1\"\n        eType=\"#//Shelf\" containment=\"true\" eOpposite=\"#//Shelf/library\"/>\n  </eClassifiers>"), "{}", f.text);
+    assert!(f.text.contains("<eStructuralFeatures xsi:type=\"ecore:EReference\" name=\"library\" eType=\"#//Library\"\n        eOpposite=\"#//Library/shelves\"/>"));
     f.edit(json!({"kind": "addSuperType", "owner": "library::Shelf", "superType": "library::Person"}));
     assert!(f.text.contains("name=\"Shelf\" eSuperTypes=\"#//Person\">"));
     f.edit(json!({"kind": "addLiteral", "owner": "library::Genre", "name": "POETRY"}));
@@ -350,7 +351,7 @@ fn edits_an_ecore_file() {
     f.edit(json!({"kind": "update", "element": "library::Title.library", "properties": {"name": "owner"}}));
     assert!(f.text.contains("eOpposite=\"#//Title/owner\""));
     f.edit(json!({"kind": "update", "element": "library::Loan.book", "properties": {"lower": 0, "upper": -1, "ordered": false, "containment": true}}));
-    assert!(f.text.contains("<eStructuralFeatures xsi:type=\"ecore:EReference\" name=\"book\" ordered=\"false\" upperBound=\"-1\" eType=\"#//Title\" containment=\"true\"/>"), "{}", f.text);
+    assert!(f.text.contains("<eStructuralFeatures xsi:type=\"ecore:EReference\" name=\"book\" ordered=\"false\" upperBound=\"-1\"\n        eType=\"#//Title\" containment=\"true\"/>"), "{}", f.text);
     f.edit(json!({"kind": "update", "element": "library::Person", "properties": {"isAbstract": false}}));
     assert!(f.text.contains("<eClassifiers xsi:type=\"ecore:EClass\" name=\"Person\">"));
     let d = f.diagram();

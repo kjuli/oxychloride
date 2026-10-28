@@ -17,7 +17,7 @@
       "type": "object",
       "description": "Where new documents of each kind go, relative to the project. Documents elsewhere in the project belong to it too.",
       "properties": {
-        "metamodels": { "type": "string", "default": "metamodels", "description": "Metamodels: OCLinEcore documents (.oclinecore) and .ecore files." },
+        "metamodels": { "type": "string", "default": "metamodels", "description": "Metamodels: OCLinEcore documents (.oclinecore) and .ecore files (their OCL annotations are checked)." },
         "constraints": { "type": "string", "default": "constraints", "description": "Constraints in Complete OCL (.ocl)." },
         "models": { "type": "string", "default": "models", "description": "Models: HUTN documents (.hutn) and XMI files (.xmi)." },
         "transformations": { "type": "string", "default": "transformations", "description": "Henshin (.henshin_text, .henshin) and QVT (.qvto, .qvtr) transformations." },
@@ -40,6 +40,12 @@
       },
       "required": ["target"],
       "additionalProperties": false
+    },
+    "targetPlatform": {
+      "type": "array",
+      "description": "The target platform of the Eclipse projects in the folder (plug-ins with a .project or META-INF/MANIFEST.MF): Eclipse installations, folders of bundles (plugins, bundle pools), bundles (jars, folders) or folders with bundles further down; relative to the project, '~/' is the home folder. The bundles the projects require (Require-Bundle) and the packages they register come from it. Written by `oxy import` and Import Eclipse Projects….",
+      "items": { "type": "string" },
+      "examples": [["~/.p2/pool/plugins"], ["/Applications/Eclipse.app/Contents/Eclipse"]]
     }
   }
 }

@@ -1,0 +1,9 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Shop
+Bundle-SymbolicName: org.example.shop;singleton:=true
+Bundle-Version: 1.2.0.qualifier
+Require-Bundle: org.example.base;bundle-version="[1.0.0,2.0.0)";visibility:=r
+ eexport,
+ org.eclipse.emf.ecore;visibility:=reexport,
+ org.example.optional;resolution:=optional

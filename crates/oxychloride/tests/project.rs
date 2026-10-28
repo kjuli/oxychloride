@@ -183,8 +183,8 @@ fn new_projects_have_the_documents_asked_for() {
             let (_, created, _, load) = create(&name, request);
             let documents: Vec<&str> =
                 paths(&created).into_iter().filter(|p| document_language(Path::new(p)).is_some()).collect();
-            // The metamodel (an `.ecore` file is not a document), and the one asked for.
-            let expected = if format == MetamodelFormat::Ecore { 1 } else { 2 };
+            // The metamodel (an OCLinEcore document or an `.ecore` file), and the one asked for.
+            let expected = 2;
             assert_eq!(documents.len(), expected, "{documents:?}");
             assert!(documents.iter().any(|p| document_language(Path::new(p)) == Some(language)), "{documents:?}");
             assert_eq!(load.documents.len(), expected);

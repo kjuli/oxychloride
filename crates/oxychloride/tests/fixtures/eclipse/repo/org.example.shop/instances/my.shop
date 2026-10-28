@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shop:Catalog xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:shop="http://example.org/shop/1.0" name="mine">
+  <items name="nut" price="2">
+    <related href="pathmap://SHOP_LIBRARY/standard.shop#//@items.0"/>
+  </items>
+  <items name="free" price="0"/>
+  <items name="bolt" price="3"/>
+</shop:Catalog>

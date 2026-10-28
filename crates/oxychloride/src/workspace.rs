@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range as ByteRange;
 use std::path::Path;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use oxy_ecore::hutn::{self, HutnLoad};
@@ -130,6 +131,16 @@ pub struct Workspace {
     pub(crate) registry: Vec<RegistryEntry>,
     /// The state of each registry entry.
     pub(crate) registry_state: Vec<crate::registry::EntryState>,
+    /// The Eclipse projects and the target platform (see `platform.rs`).
+    pub(crate) platform: Arc<crate::platform::Platform>,
+    /// The state of the packages of the Eclipse projects (by nsURI).
+    pub(crate) platform_state: Vec<(String, crate::registry::EntryState)>,
+    /// The texts of the open `.ecore` documents, by canonical path: they stand for the files.
+    pub(crate) overlays: Arc<HashMap<String, String>>,
+    /// Problems loading `.ecore` files (unresolved references), by the file's URI.
+    pub(crate) load_warnings: HashMap<String, Vec<LoadError>>,
+    /// Why `.ecore` documents could not be loaded at all.
+    pub(crate) ecore_errors: HashMap<String, LoadError>,
     /// Changes whenever `mm` is rebuilt or grows (transformation sessions refer to it).
     pub(crate) generation: u64,
     /// Transformation sessions (see `transform.rs`).
@@ -169,13 +180,18 @@ impl Workspace {
         if self.xmi_model.resource_of_uri(uri).is_some() {
             return;
         }
-        let path = self.locator().locate_prefixed(uri).unwrap_or_else(|| uri.to_string());
+        let locator = self.locator();
+        let path = locator.locate(uri).unwrap_or_else(|| uri.to_string());
         if let Some(r) = self.xmi_model.resource_of_uri(&path) {
             self.xmi_model.add_alias(r, uri);
-        } else if Path::new(&path).is_file() {
-            let result = XmiDocument::read_file(&path)
-                .map_err(Error::from)
-                .and_then(|d| self.load_model_recursive(d, loaded, warnings));
+        } else if locator.exists(&path) {
+            // A file, or an entry of a bundle's jar.
+            let result = match locator.read(&path) {
+                Some(text) if !Path::new(&path).is_file() => XmiDocument::parse(text, path.as_str()),
+                _ => XmiDocument::read_file(&path),
+            }
+            .map_err(Error::from)
+            .and_then(|d| self.load_model_recursive(d, loaded, warnings));
             match result {
                 Ok(r) => self.xmi_model.add_alias(r, uri),
                 Err(e) => warnings.push(Diagnostic { severity: Severity::Warning, ..error_diagnostic(&e) }),
@@ -223,6 +239,8 @@ impl Workspace {
         let ecore = std::mem::take(&mut self.ecore_inputs);
         self.base_mm = Metamodel::new();
         self.mm = Metamodel::new();
+        self.load_warnings.clear();
+        self.ecore_errors.clear();
         self.load_registry();
         let mut problems = Vec::new();
         for input in ecore {
@@ -234,6 +252,7 @@ impl Workspace {
                 problems.push(error_diagnostic(&e));
             }
         }
+        self.load_ecore_documents();
         // The built OCLinEcore documents refer to packages of the old `mm`; rebuild them before
         // imports are resolved against them.
         self.build_metamodel();
@@ -279,7 +298,27 @@ impl Workspace {
         }
         if std::mem::take(&mut self.models_dirty) {
             self.build_models();
+            if self.load_referenced_files() {
+                self.build_models();
+            }
         }
+    }
+
+    /// Loads the files that model documents refer to and that are not loaded (into the XMI
+    /// models), like EMF resolving proxies into a resource set: e.g. the types of
+    /// `pathmap://PCM_MODELS/Palladio.resourcetype`. Returns whether any was loaded.
+    fn load_referenced_files(&mut self) -> bool {
+        let mut uris: Vec<String> = Vec::new();
+        for r in self.model.unresolved_references() {
+            if self.model.resource_of_uri(&r.uri).is_none() && !uris.contains(&r.uri) {
+                uris.push(r.uri.clone());
+            }
+        }
+        let (mut loaded, mut warnings) = (Vec::new(), Vec::new());
+        for uri in uris {
+            self.demand_load(&uri, &mut loaded, &mut warnings);
+        }
+        !loaded.is_empty()
     }
 
     /// Rebuilds `mm` from `base_mm` and the OCLinEcore documents.
@@ -345,6 +384,7 @@ impl Workspace {
                 Language::Xmi => load_xmi_document(&doc.text, name, &self.mm, &mut model),
                 Language::Ocl
                 | Language::OclInEcore
+                | Language::Ecore
                 | Language::Henshin
                 | Language::HenshinModel
                 | Language::Qvto
@@ -353,7 +393,18 @@ impl Workspace {
             for o in &load.objects {
                 locations.insert(o.object, (name.clone(), o.span.clone()));
             }
+            // Other documents refer to it by its path.
+            model.add_alias(load.resource, oxy_ecore::ecore_loader::canonical_uri(Path::new(name)));
             loads.insert(name.clone(), load);
+        }
+        // References between documents, like those of an EMF resource set.
+        model.resolve_deferred(&self.mm);
+        for (name, load) in loads.iter_mut() {
+            if self.documents[name].language == Language::Xmi {
+                let headers: Vec<(ObjectId, ByteRange<usize>)> =
+                    load.objects.iter().map(|o| (o.object, o.name.clone())).collect();
+                load.problems.extend(hutn::check_multiplicities(&self.mm, &model, &headers));
+            }
         }
         self.model = model;
         self.hutn = loads;
@@ -383,6 +434,9 @@ impl Workspace {
     pub(crate) fn load_metamodel_file(&mut self, path: &Path) -> Result<oxy_ecore::EcoreLoad, LoadError> {
         let locator = self.locator();
         let load = locator.load_file(&mut self.base_mm, path)?;
+        for w in &load.warnings {
+            self.load_warnings.entry(w.path.clone()).or_default().push(w.clone());
+        }
         let uri = self.base_mm.resources()[load.resource].uri.clone();
         // Keep `mm` usable right away (a model being loaded may need the new packages). A
         // conflict with an OCLinEcore document is reported for the document once `mm` is
@@ -500,15 +554,9 @@ impl Workspace {
     ) -> Result<usize, Error> {
         let missing: Vec<String> =
             doc.used_ns_uris().into_iter().filter(|ns| self.mm.package_by_ns_uri(ns).is_none()).collect();
-        if !missing.is_empty() {
-            let locator = self.locator();
-            for (ns, location) in doc.schema_locations() {
-                let location = locator.locate(&location).unwrap_or(location);
-                if missing.contains(&ns) && Path::new(&location).exists() {
-                    let r = self.load_ecore_file_inner(Path::new(&location))?;
-                    warnings.extend(r.warnings);
-                }
-            }
+        for location in self.metamodel_locations(&doc, &missing) {
+            let r = self.load_ecore_file_inner(Path::new(&location))?;
+            warnings.extend(r.warnings);
         }
         let load = doc.load(&self.mm, &mut self.xmi_model)?;
         loaded.push(load.resource);
@@ -532,6 +580,17 @@ impl Workspace {
     /// Adds or replaces a document of the given language.
     pub fn open_document_as(&mut self, name: &str, text: &str, language: Language) -> Vec<Diagnostic> {
         let previous = self.documents.get(name).map(|d| d.language);
+        if language == Language::Ecore || previous == Some(Language::Ecore) {
+            return self.open_ecore_document(name, text, language);
+        }
+        self.insert_document(name, text, language);
+        self.resolve_document_imports(name);
+        self.document_changed(language, previous);
+        self.finish();
+        self.diagnostics(Some(name))
+    }
+
+    pub(crate) fn insert_document(&mut self, name: &str, text: &str, language: Language) {
         self.documents.insert(
             name.to_string(),
             DocumentEntry {
@@ -542,14 +601,20 @@ impl Workspace {
                 line_index: LineIndex::new(text),
             },
         );
-        self.resolve_document_imports(name);
-        self.document_changed(language, previous);
-        self.finish();
-        self.diagnostics(Some(name))
+    }
+
+    /// The names of the documents of a language.
+    pub(crate) fn documents_of(&self, language: Language) -> Vec<String> {
+        self.documents.iter().filter(|(_, d)| d.language == language).map(|(n, _)| n.clone()).collect()
     }
 
     pub fn close_document(&mut self, name: &str) -> bool {
         match self.documents.shift_remove(name) {
+            Some(doc) if doc.language == Language::Ecore => {
+                Arc::make_mut(&mut self.overlays).remove(&crate::ecore_documents::ecore_document_uri(name));
+                self.reload();
+                true
+            }
             Some(doc) => {
                 self.document_changed(doc.language, None);
                 self.finish();
@@ -564,7 +629,12 @@ impl Workspace {
             match l {
                 Language::OclInEcore => self.mm_dirty = true,
                 Language::Hutn | Language::Xmi => self.models_dirty = true,
-                Language::Ocl | Language::Henshin | Language::HenshinModel | Language::Qvto | Language::Qvtr => {}
+                Language::Ocl
+                | Language::Ecore
+                | Language::Henshin
+                | Language::HenshinModel
+                | Language::Qvto
+                | Language::Qvtr => {}
             }
         }
     }
@@ -604,7 +674,7 @@ impl Workspace {
                 let (parsed, _) = parse_ecore_document(&text);
                 self.resolve_imports(name, &parsed.imports)
             }
-            Language::Hutn | Language::Henshin => (Vec::new(), Vec::new()),
+            Language::Hutn | Language::Henshin | Language::Ecore => (Vec::new(), Vec::new()),
             Language::HenshinModel => {
                 self.load_henshin_imports(name, &text);
                 (Vec::new(), Vec::new())
@@ -630,13 +700,33 @@ impl Workspace {
         let Ok(doc) = XmiDocument::parse(text, name) else { return };
         let missing: Vec<String> =
             doc.used_ns_uris().into_iter().filter(|ns| self.mm.package_by_ns_uri(ns).is_none()).collect();
+        for location in self.metamodel_locations(&doc, &missing) {
+            let _ = self.load_ecore_file_inner(Path::new(&location));
+        }
+    }
+
+    /// Where the metamodels of packages a model uses (and that are not loaded) are: the files
+    /// its `xsi:schemaLocation` names, else those the registry or the platform know for the
+    /// nsURIs (like EMF's package registry: models of PCM name no schema locations).
+    fn metamodel_locations(&self, doc: &XmiDocument, missing: &[String]) -> Vec<String> {
         let locator = self.locator();
-        for (ns, location) in doc.schema_locations() {
-            let location = locator.locate(&location).unwrap_or(location);
-            if missing.contains(&ns) && location.ends_with(".ecore") && Path::new(&location).is_file() {
-                let _ = self.load_ecore_file_inner(Path::new(&location));
+        let schema_locations = doc.schema_locations();
+        let mut out: Vec<String> = Vec::new();
+        for ns in missing {
+            let location = schema_locations
+                .iter()
+                .filter(|(n, _)| n == ns)
+                .map(|(_, l)| locator.locate(l).unwrap_or_else(|| l.clone()))
+                .chain(locator.locate(ns))
+                // Schemas for XML tooling are no metamodels.
+                .find(|l| !l.ends_with(".xsd") && locator.exists(l));
+            if let Some(l) = location
+                && !out.contains(&l)
+            {
+                out.push(l);
             }
         }
+        out
     }
 
     /// Loads the `.ecore` files a document imports. Imports of OCLinEcore documents must
@@ -681,7 +771,7 @@ impl Workspace {
             if self.base_mm.resource_of_uri(&path).is_some() {
                 continue;
             }
-            if !Path::new(&path).exists() {
+            if !self.locator().exists(&path) {
                 // Maybe a platform: URI or nsURI whose package was loaded by file name.
                 let file = target.rsplit('/').next().unwrap_or("");
                 let known = self.base_mm.resources().iter().any(|r| r.uri.rsplit(['/', '\\']).next() == Some(file));
@@ -754,12 +844,15 @@ impl Workspace {
         let mut out = Vec::new();
         if document.is_none() {
             out.extend(self.model_problems.iter().cloned());
+            out.extend(self.project_load_problems());
         }
         for (name, doc) in &self.documents {
             if document.is_some_and(|d| d != name) {
                 continue;
             }
-            if doc.language.is_model() {
+            if doc.language == Language::Ecore {
+                out.extend(self.ecore_document_problems(name));
+            } else if doc.language.is_model() {
                 out.extend(self.model_document_diagnostics(name, &compiled));
             } else if doc.language.is_transformation() {
                 out.extend(self.henshin_diagnostics(name));
@@ -770,15 +863,18 @@ impl Workspace {
                 out.extend(doc.import_diagnostics.iter().map(|d| convert_diagnostic(source, d)));
             }
         }
+        let mut texts = crate::ecore_documents::ResourceTexts::new();
         for d in compiled.env.diagnostics() {
             let source = compiled.env.source(d.source);
             let include = match (&source.kind, document) {
                 (SourceKind::Document, Some(name)) => source.name == name,
+                (SourceKind::Annotation { resource, .. }, Some(name)) => self.ecore_document_of(resource) == Some(name),
                 (_, Some(_)) => false,
                 (_, None) => true,
             };
             if include {
-                out.push(convert_diagnostic(source, &d.diagnostic));
+                let converted = convert_diagnostic(source, &d.diagnostic);
+                out.push(self.locate_embedded(converted, source, d.diagnostic.span, &mut texts));
             }
         }
         out
@@ -1213,6 +1309,7 @@ impl Workspace {
             Language::Ocl => Err(Error::Invalid("Complete OCL documents cannot be exported".into())),
             Language::Henshin | Language::HenshinModel => self.convert_transformation(name, target),
             Language::Xmi => Err(Error::Invalid("XMI documents are XMI already".into())),
+            Language::Ecore => Err(Error::Invalid("Ecore documents are .ecore files already".into())),
             Language::Qvto | Language::Qvtr => Err(Error::Invalid("QVT transformations cannot be exported".into())),
         }
     }
@@ -1255,7 +1352,7 @@ impl Workspace {
                 Ok(hutn::write(&mm, &model, load.resource))
             }
             Language::Henshin | Language::HenshinModel => self.convert_transformation_file(path, to),
-            Language::Ocl | Language::Xmi | Language::Qvto | Language::Qvtr => {
+            Language::Ocl | Language::Xmi | Language::Ecore | Language::Qvto | Language::Qvtr => {
                 Err(Error::Invalid(format!("files cannot be converted to {}", to.extension())))
             }
         }
@@ -1495,15 +1592,13 @@ fn load_xmi_document(text: &str, name: &str, mm: &Metamodel, model: &mut Model) 
                 })
                 .collect();
             // What EMF would refuse to load is an error here (the loader only warns).
-            let mut problems: Vec<Problem> = load
+            let problems: Vec<Problem> = load
                 .warnings
                 .iter()
                 .filter(|w| w.path == name)
                 .map(|w| Problem::error(error_span(text, w), w.message.clone()))
                 .collect();
-            let headers: Vec<(ObjectId, ByteRange<usize>)> =
-                objects.iter().map(|o| (o.object, o.name.clone())).collect();
-            problems.extend(hutn::check_multiplicities(mm, model, &headers));
+            // Multiplicities are checked once all documents are loaded (see `build_models`).
             HutnLoad { resource: load.resource, problems, objects }
         }
         Err(e) => {
@@ -1567,8 +1662,8 @@ pub(crate) fn severity(s: oxy_ocl::Severity) -> Severity {
 pub(crate) fn origin(kind: &SourceKind, name: &str) -> Origin {
     match kind {
         SourceKind::Document => Origin::Document { name: name.to_string() },
-        SourceKind::Annotation { resource, element, key } => {
-            Origin::Ecore { resource: resource.clone(), element: element.clone(), key: key.clone() }
+        SourceKind::Annotation { resource, element, key, .. } => {
+            Origin::Ecore { resource: resource.clone(), element: element.clone(), key: key.clone(), location: None }
         }
         SourceKind::Expression => Origin::Expression,
     }

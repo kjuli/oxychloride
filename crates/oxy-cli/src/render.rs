@@ -32,7 +32,7 @@ impl Renderer {
         self.paint("32", s)
     }
 
-    fn bold(&self, s: &str) -> String {
+    pub fn bold(&self, s: &str) -> String {
         self.paint("1", s)
     }
 
@@ -55,13 +55,13 @@ impl Renderer {
         let _ = writeln!(out, "{label}: {}", self.bold(&d.message));
         let start = d.range.start;
         let location = match &d.origin {
-            Origin::Ecore { resource, element, key } => {
-                format!(
-                    "{resource} ({element}{}) {}:{}",
-                    if key == "body" || key == "derivation" { format!(" {key}") } else { String::new() },
-                    start.line + 1,
-                    start.column + 1
-                )
+            Origin::Ecore { resource, element, key, location } => {
+                let key = if key == "body" || key == "derivation" { format!(" {key}") } else { String::new() };
+                match location {
+                    // Where it is in the file; the excerpt is of the expression.
+                    Some(at) => format!("{resource}:{}:{} ({element}{key})", at.start.line + 1, at.start.column + 1),
+                    None => format!("{resource} ({element}{key}) {}:{}", start.line + 1, start.column + 1),
+                }
             }
             _ => format!("{}:{}:{}", d.source, start.line + 1, start.column + 1),
         };

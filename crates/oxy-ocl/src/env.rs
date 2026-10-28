@@ -22,8 +22,9 @@ pub struct SourceId(pub u32);
 pub enum SourceKind {
     /// A Complete OCL document.
     Document,
-    /// An expression stored in an Ecore annotation of `element` under `key`.
-    Annotation { resource: String, element: String, key: String },
+    /// An expression stored in an Ecore annotation of `element` under `key`; `offset` is where
+    /// its `<details>` tag is in the resource's text, if it was read from one.
+    Annotation { resource: String, element: String, key: String, offset: Option<usize> },
     /// An ad-hoc expression, e.g. typed into a console.
     Expression,
 }
@@ -461,9 +462,10 @@ impl<'a> EnvironmentBuilder<'a> {
             let Some(class) = mm.class_data(c) else { continue };
             let class_name = mm.qualified_name(c);
             for ann in ocl_annotations(&mm.classifier(c).annotations) {
-                for (key, value) in &ann.details {
+                for (i, (key, value)) in ann.details.iter().enumerate() {
                     let element = format!("{class_name}::{key}");
-                    let (src, expr) = self.annotation_source(&file, &resource, &element, key, value);
+                    let (src, expr) =
+                        self.annotation_source(&file, &resource, &element, key, value, ann.offsets.get(i).copied());
                     let (expr, message) = split_status_tuple(expr);
                     let span = expr.span;
                     self.env.invariants.push(Invariant {
@@ -480,9 +482,10 @@ impl<'a> EnvironmentBuilder<'a> {
             for &f in &class.features {
                 let feature = mm.feature(f);
                 for ann in ocl_annotations(&feature.annotations) {
-                    for (key, value) in &ann.details {
+                    for (i, (key, value)) in ann.details.iter().enumerate() {
                         let element = format!("{class_name}::{}", feature.name);
-                        let (src, expr) = self.annotation_source(&file, &resource, &element, key, value);
+                        let (src, expr) =
+                            self.annotation_source(&file, &resource, &element, key, value, ann.offsets.get(i).copied());
                         let body = Body { expr, source: src, package: Some(package) };
                         match key.as_str() {
                             "derivation" => {
@@ -507,9 +510,10 @@ impl<'a> EnvironmentBuilder<'a> {
             for &o in &class.operations {
                 let op = mm.operation(o);
                 for ann in ocl_annotations(&op.annotations) {
-                    for (key, value) in &ann.details {
+                    for (i, (key, value)) in ann.details.iter().enumerate() {
                         let element = format!("{class_name}::{}()", op.name);
-                        let (src, expr) = self.annotation_source(&file, &resource, &element, key, value);
+                        let (src, expr) =
+                            self.annotation_source(&file, &resource, &element, key, value, ann.offsets.get(i).copied());
                         match key.as_str() {
                             "body" if is_invariant_operation(mm, o) => {
                                 let (expr, message) = split_status_tuple(expr);
@@ -564,6 +568,7 @@ impl<'a> EnvironmentBuilder<'a> {
         element: &str,
         key: &str,
         text: &str,
+        offset: Option<usize>,
     ) -> (SourceId, Rc<Expr>) {
         let src = self.env.add_source(Source::new(
             format!("{file}: {element}"),
@@ -572,6 +577,7 @@ impl<'a> EnvironmentBuilder<'a> {
                 resource: resource.to_string(),
                 element: element.to_string(),
                 key: key.to_string(),
+                offset,
             },
         ));
         let (expr, diags) = parse_expression(text);

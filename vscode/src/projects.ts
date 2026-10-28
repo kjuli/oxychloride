@@ -8,7 +8,16 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { Creator } from "./create";
-import { errorMessage, type DocumentLanguage, type Engine, type NewProject, type PackageInfo, type ValidationReport } from "./engine";
+import {
+  errorMessage,
+  type DocumentLanguage,
+  type EclipseBundleInfo,
+  type Engine,
+  type NewProject,
+  type PackageInfo,
+  type ValidationReport,
+} from "./engine";
+import type { EclipsePlatform } from "./platform";
 
 export const MANIFEST = "oxychloride.json";
 
@@ -28,6 +37,8 @@ export interface ProjectManifest {
   folders?: Partial<ProjectFolders>;
   registry?: Record<string, string>;
   codegen?: { target?: string; outputFolder?: string };
+  /** The target platform of the project's Eclipse projects (see `platform.ts`). */
+  targetPlatform?: string[];
 }
 
 /** Mirrors `ProjectFolders::default` in crates/oxychloride/src/project.rs. */
@@ -150,8 +161,14 @@ const CATEGORIES: Category[] = [
 
 const DOCUMENT_GLOB = `**/*.{${CATEGORIES.flatMap((c) => c.extensions).join(",")}}`;
 
-const categoryOf = (uri: vscode.Uri) => {
+/** The documents' files, with the models of extensions bundles register (`.repository`, …). */
+const documentGlob = (models: string[]) =>
+  models.length ? `**/*.{${[...CATEGORIES.flatMap((c) => c.extensions), ...models].join(",")}}` : DOCUMENT_GLOB;
+
+/** The kind of a document; files of extensions that bundles register are models. */
+const categoryOf = (uri: vscode.Uri, platform?: EclipsePlatform) => {
   const extension = path.extname(uri.path).slice(1).toLowerCase();
+  if (platform?.isModel(uri)) return CATEGORIES.find((c) => c.id === "models");
   return CATEGORIES.find((c) => c.extensions.includes(extension));
 };
 
@@ -159,7 +176,11 @@ export type ProjectNode =
   | { kind: "project"; project: ModelingProject }
   | { kind: "category"; project: ModelingProject; category: Category }
   | { kind: "file"; project: ModelingProject; uri: vscode.Uri }
-  | { kind: "problem"; project: ModelingProject; message: string };
+  | { kind: "problem"; project: ModelingProject; message: string }
+  /** The Eclipse projects in the project's folder, and one of them. */
+  | { kind: "eclipseProjects"; project: ModelingProject }
+  | { kind: "bundle"; project: ModelingProject; bundle: EclipseBundleInfo }
+  | { kind: "bundlePackage"; project: ModelingProject; bundle: EclipseBundleInfo; package: EclipseBundleInfo["packages"][number] };
 
 /** The file a command was invoked on: a URI (Explorer, code) or a file of the Projects view. */
 export function fileOf(arg: unknown): vscode.Uri | undefined {
@@ -217,6 +238,8 @@ export class Projects implements vscode.TreeDataProvider<ProjectNode>, vscode.Di
   private relisting: NodeJS.Timeout | undefined;
 
   projects: ModelingProject[] = [];
+  /** The Eclipse projects and the target platform (set once both exist). */
+  platform: EclipsePlatform | undefined;
   /** Resolves once the projects have been read for the first time. */
   readonly ready: Promise<void>;
 
@@ -286,7 +309,8 @@ export class Projects implements vscode.TreeDataProvider<ProjectNode>, vscode.Di
   }
 
   private async listDocuments(project: ModelingProject): Promise<vscode.Uri[]> {
-    const files = await vscode.workspace.findFiles(new vscode.RelativePattern(project.root, DOCUMENT_GLOB), EXCLUDE);
+    const glob = documentGlob(this.platform?.modelExtensions() ?? []);
+    const files = await vscode.workspace.findFiles(new vscode.RelativePattern(project.root, glob), EXCLUDE);
     const generated = [project.folder("generated"), project.codeFolder()];
     const nested = this.projects.filter((p) => p !== project && project.contains(p.root));
     return files
@@ -312,19 +336,44 @@ export class Projects implements vscode.TreeDataProvider<ProjectNode>, vscode.Di
     if (!node) return this.projects.map((project): ProjectNode => ({ kind: "project", project }));
     if (node.kind === "project") {
       const problem: ProjectNode[] = node.project.problem ? [{ kind: "problem", project: node.project, message: node.project.problem }] : [];
-      return [...problem, ...CATEGORIES.map((category): ProjectNode => ({ kind: "category", project: node.project, category }))];
+      const eclipse: ProjectNode[] = this.bundlesOf(node.project).length ? [{ kind: "eclipseProjects", project: node.project }] : [];
+      return [...problem, ...eclipse, ...CATEGORIES.map((category): ProjectNode => ({ kind: "category", project: node.project, category }))];
     }
     if (node.kind === "category") {
       const files = await this.documentsOf(node.project);
-      return files.filter((f) => categoryOf(f) === node.category).map((uri): ProjectNode => ({ kind: "file", project: node.project, uri }));
+      return files
+        .filter((f) => categoryOf(f, this.platform) === node.category)
+        .map((uri): ProjectNode => ({ kind: "file", project: node.project, uri }));
+    }
+    if (node.kind === "eclipseProjects") {
+      return this.bundlesOf(node.project).map((bundle): ProjectNode => ({ kind: "bundle", project: node.project, bundle }));
+    }
+    if (node.kind === "bundle") {
+      const packages = node.bundle.packages.map(
+        (p): ProjectNode => ({ kind: "bundlePackage", project: node.project, bundle: node.bundle, package: p }),
+      );
+      const missing = node.bundle.requires
+        .filter((r) => !r.location && !r.optional)
+        .map((r): ProjectNode => ({ kind: "problem", project: node.project, message: `${r.name} is required, but neither a project nor in the target platform` }));
+      const problems = (node.bundle.problems ?? []).map((message): ProjectNode => ({ kind: "problem", project: node.project, message }));
+      return [...packages, ...missing, ...problems];
     }
     return [];
   }
 
+  /** The Eclipse projects in a project's folder. */
+  bundlesOf(project: ModelingProject): EclipseBundleInfo[] {
+    return this.platform?.projectsIn(project.root) ?? [];
+  }
+
   getParent(node: ProjectNode): ProjectNode | undefined {
-    if (node.kind === "category" || node.kind === "problem") return { kind: "project", project: node.project };
+    if (node.kind === "category" || node.kind === "problem" || node.kind === "eclipseProjects") {
+      return { kind: "project", project: node.project };
+    }
+    if (node.kind === "bundle") return { kind: "eclipseProjects", project: node.project };
+    if (node.kind === "bundlePackage") return { kind: "bundle", project: node.project, bundle: node.bundle };
     if (node.kind === "file") {
-      const category = categoryOf(node.uri);
+      const category = categoryOf(node.uri, this.platform);
       return category && { kind: "category", project: node.project, category };
     }
     return undefined;
@@ -346,7 +395,7 @@ export class Projects implements vscode.TreeDataProvider<ProjectNode>, vscode.Di
         return item;
       }
       case "category": {
-        const files = (await this.documentsOf(node.project)).filter((f) => categoryOf(f) === node.category);
+        const files = (await this.documentsOf(node.project)).filter((f) => categoryOf(f, this.platform) === node.category);
         const item = new vscode.TreeItem(
           node.category.label,
           files.length ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None,
@@ -361,11 +410,61 @@ export class Projects implements vscode.TreeDataProvider<ProjectNode>, vscode.Di
       case "file": {
         const item = new vscode.TreeItem(node.uri, vscode.TreeItemCollapsibleState.None);
         const folder = path.relative(node.project.root.fsPath, path.dirname(node.uri.fsPath)).split(path.sep).join("/");
-        const category = categoryOf(node.uri);
+        const category = categoryOf(node.uri, this.platform);
         item.description = category && folder === node.project.folders[category.folder] ? undefined : folder || undefined;
         item.command = { command: "vscode.open", title: "Open", arguments: [node.uri] };
         item.contextValue = `projectFile.${path.extname(node.uri.path).slice(1).toLowerCase()}`;
         item.id = node.uri.toString();
+        return item;
+      }
+      case "eclipseProjects": {
+        const bundles = this.bundlesOf(node.project);
+        const item = new vscode.TreeItem("Eclipse Projects", vscode.TreeItemCollapsibleState.Collapsed);
+        const target = this.platform?.info?.settings.target ?? [];
+        item.description = `${bundles.length}`;
+        item.tooltip = new vscode.MarkdownString(
+          [
+            "Eclipse projects (plug-ins): their `platform:/resource` and `platform:/plugin` URIs, the packages their `plugin.xml` registers, their URI mappings and model file extensions work as in Eclipse.",
+            target.length ? `Target platform: ${target.map((t) => `\`${t}\``).join(", ")}` : "No target platform (`targetPlatform` in the manifest).",
+          ].join("\n\n"),
+        );
+        item.iconPath = new vscode.ThemeIcon("extensions");
+        item.contextValue = "eclipseProjects";
+        item.id = `${node.project.manifestUri.toString()}#eclipse`;
+        return item;
+      }
+      case "bundle": {
+        const b = node.bundle;
+        const missing = b.requires.filter((r) => !r.location && !r.optional).length;
+        const item = new vscode.TreeItem(b.name, b.packages.length || missing ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+        item.description = [b.version, missing ? `${missing} missing` : undefined].filter(Boolean).join(" · ");
+        item.tooltip = new vscode.MarkdownString(
+          [
+            `**${b.name}**${b.version ? ` ${b.version}` : ""}`,
+            `\`${b.location}\``,
+            b.requires.length ? `Requires: ${b.requires.map((r) => (r.location ? r.name : `~~${r.name}~~`)).join(", ")}` : "",
+            b.modelExtensions?.length ? `Models: ${b.modelExtensions.map((e) => `\`.${e}\``).join(", ")}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        );
+        item.iconPath = new vscode.ThemeIcon(missing ? "warning" : "package");
+        item.resourceUri = vscode.Uri.file(b.location);
+        item.contextValue = "bundle";
+        item.id = `${node.project.manifestUri.toString()}#bundle:${b.location}`;
+        return item;
+      }
+      case "bundlePackage": {
+        const p = node.package;
+        const item = new vscode.TreeItem(p.nsUri, vscode.TreeItemCollapsibleState.None);
+        item.description = p.status === "loaded" ? p.location && path.basename(p.location) : (p.message ?? p.status);
+        item.tooltip = [p.nsUri, p.location, p.message].filter(Boolean).join("\n");
+        const ok = p.status === "loaded";
+        item.iconPath = new vscode.ThemeIcon(ok ? "symbol-namespace" : "error", ok ? undefined : new vscode.ThemeColor("problemsErrorIcon.foreground"));
+        if (p.location && !p.location.startsWith("archive:")) {
+          item.command = { command: "vscode.open", title: "Open", arguments: [vscode.Uri.file(p.location)] };
+        }
+        item.contextValue = "bundlePackage";
         return item;
       }
       case "problem": {
@@ -763,7 +862,7 @@ export class Projects implements vscode.TreeDataProvider<ProjectNode>, vscode.Di
     const project = await this.chooseProject(node);
     if (!project) return undefined;
     await this.engineReady();
-    const models = (await this.documentsOf(project)).filter((f) => categoryOf(f)?.id === "models");
+    const models = (await this.documentsOf(project)).filter((f) => categoryOf(f, this.platform)?.id === "models");
     // Opening a document hands it to the language server.
     for (const m of models) await vscode.workspace.openTextDocument(m);
     const report = await this.engine.validate({ ecore: true, contracts: true, includeSatisfied: true });
@@ -789,7 +888,7 @@ export class Projects implements vscode.TreeDataProvider<ProjectNode>, vscode.Di
   async generateCode(node?: ProjectNode): Promise<unknown> {
     const project = await this.chooseProject(node);
     if (!project) return undefined;
-    const metamodels = (await this.documentsOf(project)).filter((f) => categoryOf(f)?.id === "metamodels");
+    const metamodels = (await this.documentsOf(project)).filter((f) => categoryOf(f, this.platform)?.id === "metamodels");
     let metamodel: vscode.Uri | undefined = metamodels[0];
     if (metamodels.length > 1) {
       // A generated `.ecore` next to its OCLinEcore document is the same metamodel.

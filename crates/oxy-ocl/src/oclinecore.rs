@@ -608,7 +608,7 @@ impl<'d> Builder<'_, 'd> {
 }
 
 fn annotation(def: &AnnotationDef) -> Annotation {
-    Annotation { source: def.source.clone(), details: def.details.clone() }
+    Annotation { source: def.source.clone(), details: def.details.clone(), offsets: Vec::new() }
 }
 
 /// The annotation with `source`, created if missing (at the front when `first`).
@@ -616,7 +616,7 @@ fn annotation_mut<'a>(annotations: &'a mut Vec<Annotation>, source: &str, first:
     let pos = match annotations.iter().position(|a| a.source == source) {
         Some(p) => p,
         None => {
-            let a = Annotation { source: source.to_string(), details: Vec::new() };
+            let a = Annotation { source: source.to_string(), ..Annotation::default() };
             if first {
                 annotations.insert(0, a);
                 0

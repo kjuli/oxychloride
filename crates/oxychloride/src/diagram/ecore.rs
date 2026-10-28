@@ -33,6 +33,148 @@ impl File {
     }
 }
 
+/// The width beyond which EMF continues a start tag's attributes on the next line (the
+/// `LINE_WIDTH` its Ecore resources save with).
+const LINE_WIDTH: usize = 80;
+
+/// Lays out the edits of an `.ecore` text as EMF writes them: line breaks as the document
+/// has them, and the start tags they touch wrapped like EMF's `XMLString` does (an attribute
+/// goes on a new line, two levels deeper than the tag, once the line is longer than
+/// [`LINE_WIDTH`]). Returns the edits that turn `text` into that, line by line.
+pub(crate) fn emf_layout(text: &str, edits: Vec<ByteEdit>) -> Result<Vec<ByteEdit>, Error> {
+    let crlf = text.contains("\r\n");
+    let edits: Vec<ByteEdit> = normalize_edits(edits)?
+        .into_iter()
+        .map(|e| {
+            let lf = e.text.replace("\r\n", "\n");
+            ByteEdit { text: if crlf { lf.replace('\n', "\r\n") } else { lf }, ..e }
+        })
+        .collect();
+    // Where the edits are in the new text.
+    let mut changed = Vec::new();
+    let mut delta: isize = 0;
+    for e in &edits {
+        let start = (e.range.start as isize + delta) as usize;
+        changed.push(start..start + e.text.len());
+        delta += e.text.len() as isize - e.range.len() as isize;
+    }
+    let mut new = apply_edits(text, edits)?;
+    // The start tags those touch, last first (laying one out moves the ones after it).
+    let mut tags: Vec<usize> = Vec::new();
+    for range in &changed {
+        let from = line_start(&new, range.start);
+        let to = line_end(&new, range.end.min(new.len()));
+        // A tag the range starts in (its attribute values never contain `<`).
+        if let Some(open) = new[..range.start].rfind('<')
+            && is_start_tag(&new, open)
+            && start_tag_end(&new, open) > range.start
+        {
+            tags.push(open);
+        }
+        let mut i = from;
+        while let Some(at) = new[i..to].find('<') {
+            if is_start_tag(&new, i + at) {
+                tags.push(i + at);
+            }
+            i += at + 1;
+        }
+    }
+    tags.sort_unstable();
+    tags.dedup();
+    let unit = indent_unit(text);
+    let break_line = if crlf { "\r\n" } else { "\n" };
+    for open in tags.into_iter().rev() {
+        if !starts_line(&new, open) {
+            continue;
+        }
+        let end = start_tag_end(&new, open);
+        let indent = indentation(&new, open).to_string();
+        let laid_out = layout_start_tag(&new[open..end], &indent, &format!("{indent}{unit}{unit}"), break_line);
+        new.replace_range(open..end, &laid_out);
+    }
+    Ok(crate::textdiff::line_replacements(text, &new).into_iter().map(|r| ByteEdit::replace(r.range, r.text)).collect())
+}
+
+/// Whether a start tag (`<name`, not `</`, `<?`, `<!`) begins at `at`.
+fn is_start_tag(text: &str, at: usize) -> bool {
+    text[at + 1..].starts_with(|c: char| c.is_alphabetic() || c == '_')
+}
+
+/// The end of the start tag at `open` (after its `>`), skipping quoted values.
+fn start_tag_end(text: &str, open: usize) -> usize {
+    let mut quote = None;
+    for (i, c) in text[open..].char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => return open + i + 1,
+            _ => {}
+        }
+    }
+    text.len()
+}
+
+/// A start tag laid out as EMF writes it, from its text: the attributes, as written, joined by
+/// a space until the line is longer than [`LINE_WIDTH`], then on a new line with `continuation`.
+fn layout_start_tag(tag: &str, indent: &str, continuation: &str, break_line: &str) -> String {
+    let body = tag.trim_start_matches('<');
+    let (body, close) = match body.strip_suffix("/>") {
+        Some(b) => (b, "/>"),
+        None => (body.strip_suffix('>').unwrap_or(body), ">"),
+    };
+    // The name, then the attributes (`name="value"`, quotes respected).
+    let mut parts: Vec<String> = Vec::new();
+    let (mut current, mut quote) = (String::new(), None);
+    for c in body.chars() {
+        match (quote, c) {
+            (None, c) if c.is_whitespace() => {
+                if !current.is_empty() {
+                    parts.push(std::mem::take(&mut current));
+                }
+            }
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                current.push(c);
+            }
+            (Some(q), c) if c == q => {
+                quote = None;
+                current.push(c);
+            }
+            (_, c) => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    let Some((name, attrs)) = parts.split_first() else { return tag.to_string() };
+    // In the order of their features (runs of known attributes; others stay where they are).
+    let mut attrs = attrs.to_vec();
+    let rank = |a: &String| attribute_rank(a.split('=').next().unwrap_or_default());
+    let mut i = 0;
+    while i < attrs.len() {
+        let run = attrs[i..].iter().take_while(|a| rank(a) > 0).count();
+        attrs[i..i + run].sort_by_key(rank);
+        i += run.max(1);
+    }
+    let mut out = format!("<{name}");
+    let mut width = indent.chars().count() + out.chars().count();
+    for a in &attrs {
+        if width > LINE_WIDTH {
+            out.push_str(break_line);
+            out.push_str(continuation);
+            width = continuation.chars().count();
+        } else {
+            out.push(' ');
+            width += 1;
+        }
+        out.push_str(a);
+        width += a.chars().count();
+    }
+    out.push_str(close);
+    out
+}
+
 /// Attributes whose values are references (`#//Class`, `other.ecore#//Class`, …).
 const REFERENCE_ATTRIBUTES: &[&str] =
     &["eType", "eSuperTypes", "eOpposite", "eClassifier", "eKeys", "eExceptions", "references"];
@@ -44,8 +186,10 @@ const ATTRIBUTE_ORDER: &[&str] = &[
     "nsURI",
     "nsPrefix",
     "instanceClassName",
-    "literal",
+    "instanceTypeName",
+    "serializable",
     "value",
+    "literal",
     "abstract",
     "interface",
     "eSuperTypes",

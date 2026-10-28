@@ -45,6 +45,12 @@ pub struct ProjectManifest {
     pub registry: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codegen: Option<CodegenSettings>,
+    /// The target platform of the project's Eclipse projects (see docs/PROJECTS.md, "Eclipse
+    /// projects"): bundles (jars, folders), folders of bundles (an installation's `plugins`, a
+    /// bundle pool), installations, or folders with bundles further down; relative to the
+    /// project, or absolute (`~/` is the home folder).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_platform: Vec<String>,
 }
 
 /// The folders of a project, relative to it.
@@ -162,6 +168,28 @@ impl Project {
             .collect()
     }
 
+    /// The project's Eclipse projects (those below its folder) and their target platform.
+    pub fn platform(&self) -> PlatformSettings {
+        let root = std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone());
+        PlatformSettings {
+            workspace: vec![root.to_string_lossy().into_owned()],
+            target: self
+                .manifest
+                .target_platform
+                .iter()
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| {
+                    let t = t.trim();
+                    if t.starts_with("~/") || Path::new(t).is_absolute() {
+                        t.to_string()
+                    } else {
+                        root.join(t).to_string_lossy().into_owned()
+                    }
+                })
+                .collect(),
+        }
+    }
+
     /// The folder the generated code goes into.
     pub fn code_folder(&self) -> PathBuf {
         let codegen = self.manifest.codegen.as_ref().and_then(|c| c.output_folder.as_deref());
@@ -170,9 +198,15 @@ impl Project {
 
     /// The project's documents (files of the languages documents have), sorted by path.
     pub fn documents(&self) -> Vec<PathBuf> {
+        self.documents_with(&[])
+    }
+
+    /// The project's documents, with the models of further file extensions (those bundles
+    /// register, see [`Workspace::model_extensions`]).
+    pub fn documents_with(&self, model_extensions: &[String]) -> Vec<PathBuf> {
         let skipped = [self.resolve(&self.manifest.folders.generated), self.code_folder()];
         let mut out = Vec::new();
-        collect_documents(&self.root, 0, &skipped, &mut out);
+        collect_documents(&self.root, 0, &skipped, model_extensions, &mut out);
         // Paths below the current directory as `metamodels/a.oclinecore`, not `./metamodels/…`.
         let mut out: Vec<PathBuf> =
             out.into_iter().map(|p| p.strip_prefix(".").map(Path::to_path_buf).unwrap_or(p)).collect();
@@ -183,12 +217,22 @@ impl Project {
 
 /// The language of a document file, by its extension (`None` for other files).
 pub fn document_language(path: &Path) -> Option<Language> {
+    document_language_with(path, &[])
+}
+
+/// The language of a document file, by its extension, where `model_extensions` are those of
+/// XMI models too (`None` for other files).
+pub fn document_language_with(path: &Path, model_extensions: &[String]) -> Option<Language> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if model_extensions.iter().any(|e| e.eq_ignore_ascii_case(&ext)) {
+        return Some(Language::Xmi);
+    }
     match ext.as_str() {
         "ocl" => Some(Language::Ocl),
         "oclinecore" => Some(Language::OclInEcore),
         "hutn" => Some(Language::Hutn),
         "xmi" => Some(Language::Xmi),
+        "ecore" => Some(Language::Ecore),
         "henshin_text" => Some(Language::Henshin),
         "henshin" => Some(Language::HenshinModel),
         "qvto" => Some(Language::Qvto),
@@ -197,7 +241,7 @@ pub fn document_language(path: &Path) -> Option<Language> {
     }
 }
 
-fn collect_documents(dir: &Path, depth: usize, skipped: &[PathBuf], out: &mut Vec<PathBuf>) {
+fn collect_documents(dir: &Path, depth: usize, skipped: &[PathBuf], extensions: &[String], out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -211,9 +255,13 @@ fn collect_documents(dir: &Path, depth: usize, skipped: &[PathBuf], out: &mut Ve
                 && !SKIPPED_DIRS.contains(&name.as_str())
                 && !skipped.iter().any(|s| same_path(s, &path))
             {
-                collect_documents(&path, depth + 1, skipped, out);
+                collect_documents(&path, depth + 1, skipped, extensions, out);
             }
-        } else if document_language(&path).is_some() {
+        } else if let Some(language) = document_language_with(&path, extensions) {
+            // An `.ecore` file written from the OCLinEcore document next to it is that document.
+            if language == Language::Ecore && path.with_extension("oclinecore").is_file() {
+                continue;
+            }
             out.push(path);
         }
     }
@@ -223,10 +271,46 @@ fn same_path(a: &Path, b: &Path) -> bool {
     a == b || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
+/// The problems of a project's Eclipse projects and target platform: target platform locations
+/// that do not exist, packages whose `.ecore` files are missing, required bundles found nowhere.
+fn platform_problems(platform: &PlatformInfo, problem: &dyn Fn(String) -> Diagnostic) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for t in &platform.target {
+        if let Some(p) = &t.problem {
+            out.push(problem(format!("targetPlatform: {p}")));
+        }
+    }
+    for b in &platform.projects {
+        for p in &b.packages {
+            if let Some(message) = p.message.as_ref().filter(|_| p.status != RegistryStatus::Loaded) {
+                out.push(problem(format!("{}: package '{}': {message}", b.name, p.ns_uri)));
+            }
+        }
+        for message in &b.problems {
+            out.push(problem(format!("{}: {message}", b.name)));
+        }
+    }
+    if !platform.missing.is_empty() {
+        let names: Vec<String> =
+            platform.missing.iter().map(|m| format!("{} (required by {})", m.name, m.required_by)).collect();
+        out.push(Diagnostic {
+            severity: Severity::Warning,
+            ..problem(format!(
+                "{} required bundle{} {} neither a project nor in the target platform: {}",
+                names.len(),
+                if names.len() == 1 { "" } else { "s" },
+                if names.len() == 1 { "is" } else { "are" },
+                names.join(", ")
+            ))
+        });
+    }
+    out
+}
+
 /// The order documents are opened in: metamodels first (the others use them), models last.
 fn opening_order(language: Language) -> u8 {
     match language {
-        Language::OclInEcore => 0,
+        Language::Ecore | Language::OclInEcore => 0,
         Language::Ocl => 1,
         Language::Henshin | Language::HenshinModel | Language::Qvto | Language::Qvtr => 2,
         Language::Hutn | Language::Xmi => 3,
@@ -248,14 +332,20 @@ impl Workspace {
             range: Range::default(),
         };
         let mut load = ProjectLoad::default();
+        let platform = self.set_platform(project.platform());
+        load.problems.extend(platform_problems(&platform, &problem));
         for info in self.set_registry(project.registry()) {
             if let Some(message) = info.message {
                 load.problems.push(problem(format!("registry: '{}': {message}", info.uri)));
             }
             load.problems.extend(info.warnings);
         }
-        let mut documents: Vec<(PathBuf, Language)> =
-            project.documents().into_iter().filter_map(|p| Some((p.clone(), document_language(&p)?))).collect();
+        let extensions = self.model_extensions();
+        let mut documents: Vec<(PathBuf, Language)> = project
+            .documents_with(&extensions)
+            .into_iter()
+            .filter_map(|p| Some((p.clone(), document_language_with(&p, &extensions)?)))
+            .collect();
         documents.sort_by_key(|(_, language)| opening_order(*language));
         for (path, language) in documents {
             let name = path.to_string_lossy().into_owned();
@@ -270,6 +360,46 @@ impl Workspace {
         // Imports between documents resolve once all are there.
         self.reload();
         load
+    }
+
+    /// A modeling project of the Eclipse projects in a folder (see [`ImportEclipseRequest`]):
+    /// its manifest (an existing one, with the target platform replaced), and the Eclipse
+    /// projects found with the target platform — their packages loaded, their requirements
+    /// looked up. Nothing is written, and the workspace is not used.
+    pub fn import_eclipse_projects(request: &ImportEclipseRequest) -> Result<ImportedProject, Error> {
+        let folder = Path::new(&request.folder);
+        if !folder.is_dir() {
+            return Err(Error::NotFound(format!("there is no folder '{}'", folder.display())));
+        }
+        let mut manifest = match Project::load(folder) {
+            Ok(existing) => existing.manifest,
+            Err(_) => ProjectManifest::default(),
+        };
+        manifest.target_platform = request.target_platform.clone();
+        let mut project = Project { root: folder.to_path_buf(), manifest };
+        let mut ws = Workspace::new();
+        let platform = ws.set_platform(project.platform());
+        if platform.projects.is_empty() {
+            return Err(Error::Invalid(format!(
+                "there are no Eclipse projects in '{}' (folders with a .project or a META-INF/MANIFEST.MF)",
+                folder.display()
+            )));
+        }
+        let manifest = &mut project.manifest;
+        if let Some(name) = request.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            manifest.name = name.to_string();
+        } else if manifest.name.trim().is_empty() {
+            manifest.name = match platform.projects.as_slice() {
+                [only] => only.project.clone().unwrap_or_else(|| only.name.clone()),
+                _ => {
+                    let folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+                    folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                }
+            };
+        }
+        let mut text = serde_json::to_string_pretty(&project.manifest).expect("serializable");
+        text.push('\n');
+        Ok(ImportedProject { manifest: ProjectFile { path: MANIFEST.to_string(), text }, platform })
     }
 
     /// A new document about loaded metamodels (see [`NewDocumentRequest`]).
@@ -288,6 +418,16 @@ impl Workspace {
                 let ns_uri = request.ns_uri.clone().unwrap_or_else(|| default_ns_uri(&package));
                 check_uri(&ns_uri)?;
                 Ok(templates::new_metamodel(&package, &ns_uri))
+            }
+            // The same metamodel, as EMF writes it.
+            Language::Ecore => {
+                let package = identifier(name);
+                let ns_uri = request.ns_uri.clone().unwrap_or_else(|| default_ns_uri(&package));
+                check_uri(&ns_uri)?;
+                let mut ws = Workspace::new();
+                let document = format!("{package}.oclinecore");
+                ws.open_document_as(&document, &templates::new_metamodel(&package, &ns_uri), Language::OclInEcore);
+                Ok(ws.export_document(&document, None)?.text)
             }
             Language::Ocl => match packages.first() {
                 Some(_) => Ok(templates::new_constraints(&packages)),
@@ -449,6 +589,7 @@ impl Workspace {
             folders: folders.clone(),
             registry,
             codegen: request.codegen.clone().map(|target| CodegenSettings { target, output_folder: None }),
+            target_platform: Vec::new(),
         };
         let mut manifest_text = serde_json::to_string_pretty(&manifest).expect("serializable");
         manifest_text.push('\n');
