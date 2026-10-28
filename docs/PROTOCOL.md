@@ -302,6 +302,16 @@ type QvtRunResult = {
 };
 ```
 
+## Modeling projects
+
+A modeling project is a folder with a manifest, `oxychloride.json` (see [PROJECTS.md](PROJECTS.md)). Clients read manifests themselves (the package registry of a project is given to `setRegistry`); these methods write new projects and documents from the engine's templates, so that every client creates the same. Neither writes files.
+
+### `newProject` `{name, description?, nsUri?, metamodel?, include?, codegen?}` → `{package, nsUri, files: [{path, text}]}`
+The files of a new project around one metamodel, named after the project (`My Shop` → package `my_shop`, nsURI `http://example.org/my_shop` unless given): the manifest first, the metamodel (`metamodel`: `"oclinecore"`, the default, or `"ecore"` — an `.ecore` file registered in the manifest's registry), then, by `include` (languages; default: all), constraints (`ocl`), a model (`hutn`, `xmi`: the same objects), a Henshin transformation (`henshin` as text, `henshinModel` as a `.henshin` file; both: a pair the extension keeps equivalent), QVT transformations copying the model (`qvto`, `qvtr`), and a `README.md` and `.vscode/extensions.json`. `codegen` (a target of `codeTargets`) goes into the manifest. Paths are relative to the project folder, with `/`s. The documents are checked before they are returned: a name the languages cannot use (a keyword, say) fails (`-32602`) with the problem, as do an empty name, an nsURI with quotes or spaces and an unknown target.
+
+### `newDocument` `{language, name, packages?, nsUri?}` → `{text}`
+The text of a new document about loaded packages (`packages`: qualified names): an OCLinEcore metamodel with a package named after `name` (`oclinecore`, nsURI `nsUri` or `http://example.org/<name>`), Complete OCL importing `packages` (`ocl`), a HUTN model of the first package's root package (`hutn`), or a transformation `name` from models of the first package to models of the last (`qvto`, `qvtr`), mapping (relating) a class of each that no containment holds. New Henshin transformations are written with `editTransformation` (`setImports`), new XMI models by clients.
+
 ## Rule diagrams
 
 A Henshin document of either syntax as diagrams in Henshin's notation, and diagram edits as text edits; as for metamodel diagrams, the text is the only source of truth. Ids are made of names: a rule `r`, a multi-rule `r/m` (nested `r/m/n`), a condition graph of a matching formula `r#g`; a node `<scope>::n`, an edge `<scope>::s->t:ref`, an attribute `<scope>::n.a` (the scope it is written in, e.g. a multi-rule's `reuse`); a unit `u` and the elements of its body `u@1`, `u@2.1.1` (element 2's first list's first element); a repeated id gets `#2`, ….

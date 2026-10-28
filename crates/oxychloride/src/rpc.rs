@@ -10,7 +10,8 @@ use serde_json::{Value as Json, json};
 use std::collections::HashMap;
 
 use crate::protocol::{
-    CodeRequest, Language, MetamodelEdit, ObjectRef, Position, QvtRunRequest, RegistryEntry, TransformationEdit,
+    CodeRequest, Language, MetamodelEdit, NewDocumentRequest, NewProjectRequest, ObjectRef, Position, QvtRunRequest,
+    RegistryEntry, TransformationEdit,
 };
 use crate::transform::ExploreRequest;
 use crate::workspace::{Error, ValidateOptions, Workspace};
@@ -62,6 +63,8 @@ pub const METHODS: &[&str] = &[
     "syncTransformation",
     "qvtTransformations",
     "runQvt",
+    "newProject",
+    "newDocument",
 ];
 
 pub mod codes {
@@ -577,6 +580,14 @@ impl Server {
             "runQvt" => {
                 let p: QvtRunRequest = params(p)?;
                 to_json(ws.run_qvt(&p)?)
+            }
+            "newProject" => {
+                let p: NewProjectRequest = params(p)?;
+                to_json(Workspace::new_project(&p)?)
+            }
+            "newDocument" => {
+                let p: NewDocumentRequest = params(p)?;
+                to_json(json!({ "text": ws.new_document(&p)? }))
             }
             other => Err(RpcError::new(codes::METHOD_NOT_FOUND, format!("unknown method '{other}'"))),
         }

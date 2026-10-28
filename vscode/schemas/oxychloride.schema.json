@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Oxychloride modeling project",
+  "description": "The manifest of a modeling project: a folder holding metamodels, constraints, models and transformations. Every document below the folder belongs to the project, except those of nested projects, hidden folders, build output and generated code. See docs/PROJECTS.md.",
+  "type": "object",
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": {
+      "type": "string",
+      "description": "The project's name (default: the name of its folder)."
+    },
+    "description": {
+      "type": "string",
+      "description": "A sentence about the project."
+    },
+    "folders": {
+      "type": "object",
+      "description": "Where new documents of each kind go, relative to the project. Documents elsewhere in the project belong to it too.",
+      "properties": {
+        "metamodels": { "type": "string", "default": "metamodels", "description": "Metamodels: OCLinEcore documents (.oclinecore) and .ecore files." },
+        "constraints": { "type": "string", "default": "constraints", "description": "Constraints in Complete OCL (.ocl)." },
+        "models": { "type": "string", "default": "models", "description": "Models: HUTN documents (.hutn) and XMI files (.xmi)." },
+        "transformations": { "type": "string", "default": "transformations", "description": "Henshin (.henshin_text, .henshin) and QVT (.qvto, .qvtr) transformations." },
+        "generated": { "type": "string", "default": "src-gen", "description": "Generated code; its documents are not part of the project." }
+      },
+      "additionalProperties": false
+    },
+    "registry": {
+      "type": "object",
+      "description": "The project's package registry: URIs (nsURIs, or URIs other files use for a metamodel, reachable or not) and the metamodel files they stand for, relative to the project. A URI ending in '/' maps a prefix to a folder. Used by the VS Code extension and by `oxy check`.",
+      "additionalProperties": { "type": "string" },
+      "examples": [{ "http://example.org/shop": "metamodels/shop.ecore", "pathmap://MODELS/": "models" }]
+    },
+    "codegen": {
+      "type": "object",
+      "description": "How Generate Code… generates code for the project's metamodels (without asking).",
+      "properties": {
+        "target": { "type": "string", "description": "The target language.", "examples": ["python", "rust"] },
+        "outputFolder": { "type": "string", "description": "The folder the code is written into, relative to the project (default: the 'generated' folder)." }
+      },
+      "required": ["target"],
+      "additionalProperties": false
+    }
+  }
+}

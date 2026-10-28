@@ -7,9 +7,10 @@ An OCL (Object Constraint Language) engine for Ecore models, written in Rust: a 
 - **Graph transformations** — in-place model transformations with **Henshin**, written in its textual syntax (`.henshin_text`) or as the `.henshin` models of Henshin's graphical editors — equivalent, converted into each other and kept in sync in pairs: rules with application conditions, attribute conditions and multi-rules, units, step-by-step application and state space exploration, with every state checked against the OCL constraints. See [docs/HENSHIN.md](docs/HENSHIN.md).
 - **Model transformations** — **QVT**, the OMG standard as Eclipse QVTo and QVTd implement it: **Operational Mappings** (`.qvto`: mappings with guards and init/population/end sections, helpers and queries, `resolve` over the trace, Imperative OCL) and **Relations** (`.qvtr`: relations between object patterns with `when` and `where` clauses and keys, run in the direction of a model — creating what the relations demand of it, or only checking it). Both are type checked as they are edited and run on the models of the workspace, producing new models as XMI or HUTN. See [docs/QVT.md](docs/QVT.md).
 - **Code generation** — native **Python** packages and **Rust** crates from a metamodel, like EMF's generated Java: classes with consistent containment and opposites, XMI loading and saving, and the OCL (invariants, operation bodies, pre- and postconditions, derived features, definitions) translated into native code that does not need the engine. See [docs/CODEGEN.md](docs/CODEGEN.md).
-- **CLI** (`oxy`) — check documents, run constraints against models, evaluate expressions, check the OCL embedded in metamodels, convert between XML and text formats, run QVT transformations, generate code.
+- **Modeling projects** — a folder with a manifest (`oxychloride.json`) holding metamodels, constraints, models and transformations; `oxy new` (or VS Code's *New Modeling Project…*) creates one with a metamodel and a constraint, model, Henshin rules and QVT transformations of it, all free of errors; `oxy check` checks a whole project, models included. See [docs/PROJECTS.md](docs/PROJECTS.md).
+- **CLI** (`oxy`) — create modeling projects, check documents (or a whole project), run constraints against models, evaluate expressions, check the OCL embedded in metamodels, convert between XML and text formats, run QVT transformations, generate code.
 - **Integration API** — a JSON-RPC protocol over stdio (`oxy serve`), the same protocol through a C ABI (`liboxychloride_ffi`), and a Rust API, so other modelling tools can validate their models with OCL.
-- **VS Code extension** — the same in VS Code, through a language server (`oxy lsp`): OCLinEcore metamodels, HUTN and XMI models checked live against all their OCL constraints, a graphical **metamodel diagram** for `.ecore` and `.oclinecore` files that edits the same document as the text editor beside it, an OCL console, a package registry that maps nsURIs and placeholder URIs to `.ecore` files, metamodel/model views that create instances, XML Schemas so the XML extension validates XMI files, code generation from the context menu, and Henshin transformations with highlighting, completion, a graphical **rule diagram** in Henshin's notation and colors (for texts and `.henshin` files, which are kept equivalent), and a view that applies rules step by step and draws state spaces; QVT transformations (`.qvto`, `.qvtr`) with highlighting, diagnostics, hovers and completion, run on a model from its context menu (the transformations that fit it are offered).
+- **VS Code extension** — the same in VS Code, through a language server (`oxy lsp`): modeling projects (created by a command, shown by kind of document, with new documents in the right folders), OCLinEcore metamodels, HUTN and XMI models checked live against all their OCL constraints, a graphical **metamodel diagram** for `.ecore` and `.oclinecore` files that edits the same document as the text editor beside it, an OCL console, a package registry that maps nsURIs and placeholder URIs to `.ecore` files, metamodel/model views that create instances, XML Schemas so the XML extension validates XMI files, code generation from the context menu, and Henshin transformations with highlighting, completion, a graphical **rule diagram** in Henshin's notation and colors (for texts and `.henshin` files, which are kept equivalent), and a view that applies rules step by step and draws state spaces; QVT transformations (`.qvto`, `.qvtr`) with highlighting, diagnostics, hovers and completion, run on a model from its context menu (the transformations that fit it are offered).
 
 ## Quick start
 
@@ -47,6 +48,9 @@ $B qvt examples/qvt/uml2rdbms.qvto -e examples/qvt/uml.oclinecore -e examples/qv
   --in source=examples/qvt/company.hutn --out target=company.xmi
 $B qvt examples/qvt/uml2rdbms.qvtr -e examples/qvt/uml.oclinecore -e examples/qvt/rdbms.oclinecore \
   --in source=examples/qvt/company.hutn --in target=company.xmi --check
+
+# A modeling project: a metamodel with constraints, models and transformations of it; check all of it.
+$B new shop && (cd shop && ../$B check)
 
 # Generate a Python package (or a Rust crate) with the OCL as native code.
 $B generate examples/library/library.ecore -d examples/library/library.ocl -t python -o generated
@@ -211,7 +215,7 @@ See [vscode/README.md](vscode/README.md). In short: `cargo build -p oxy-cli`, th
 | `crates/oxy-henshin` | Henshin's textual syntax and `.henshin` models (reading, writing, JavaScript expressions), rules and units resolved against metamodels, graph matching and transformation, state space exploration |
 | `crates/oxy-qvt` | QVT transformations: Operational Mappings and Relations (parsers on OCL's QVT dialect, compilers, interpreters) |
 | `crates/oxy-codegen` | Code generation: the code model of a metamodel with its OCL lowered, the Python and Rust targets and their runtimes |
-| `crates/oxychloride` | `Workspace` API, JSON protocol types, JSON-RPC server, editor support (hover, completion), metamodel and rule diagrams and their edits, transformation sessions, converting and syncing the two syntaxes of Henshin, QVT documents and runs |
+| `crates/oxychloride` | `Workspace` API, JSON protocol types, JSON-RPC server, modeling projects (manifests, templates of new projects and documents), editor support (hover, completion), metamodel and rule diagrams and their edits, transformation sessions, converting and syncing the two syntaxes of Henshin, QVT documents and runs |
 | `crates/oxy-cli` | The `oxy` command line tool |
 | `crates/oxy-ffi` | C ABI (`cdylib`/`staticlib`) |
 | `crates/oxy-lsp` | Language server (`oxy lsp`) |
@@ -221,7 +225,8 @@ See [vscode/README.md](vscode/README.md). In short: `cargo build -p oxy-cli`, th
 | `examples/university` | Example metamodel in OCLinEcore (with pre- and postconditions), model in HUTN, and Henshin transformations (as text and as the equivalent `.henshin` model) |
 | `examples/philosophers` | The dining philosophers: metamodel, model and Henshin rules (text and `.henshin`) for state space exploration |
 | `examples/qvt` | Class diagrams to relational schemas in QVT Operational Mappings (with a library) and QVT Relations: both metamodels (OCLinEcore), a model (HUTN) |
-| `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [code generation](docs/CODEGEN.md), [Henshin](docs/HENSHIN.md) and [QVT](docs/QVT.md) notes |
+| `examples/shop` | A modeling project, as `oxy new` creates it: manifest, metamodel, constraints, model (HUTN and XMI), Henshin rules, QVTo and QVTr transformations |
+| `docs/` | [Protocol](docs/PROTOCOL.md), [architecture](docs/ARCHITECTURE.md), [modeling projects](docs/PROJECTS.md), [code generation](docs/CODEGEN.md), [Henshin](docs/HENSHIN.md) and [QVT](docs/QVT.md) notes |
 
 `cargo build` / `cargo test` cover the engine, the CLI, the C ABI and the language server; the extension is built with npm (see [vscode/README.md](vscode/README.md)).
 

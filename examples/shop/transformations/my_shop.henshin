@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<henshin:Module xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ecore="http://www.eclipse.org/emf/2002/Ecore" xmlns:henshin="http://www.eclipse.org/emf/2011/Henshin" xmi:id="_2AGokAU8ZL9u5zqYOrdP3Q" name="my_shop">
+  <imports href="http://example.org/my_shop#/"/>
+  <units xsi:type="henshin:Rule" xmi:id="_Qzin-E9JPtN8rU6Qrt5dMg" name="addElement">
+    <parameters xmi:id="_wgyJ3J9YuBo3Or8tYHy_mQ" name="name" kind="IN">
+      <type xsi:type="ecore:EDataType" href="http://www.eclipse.org/emf/2002/Ecore#//EString"/>
+    </parameters>
+    <lhs xmi:id="_VDTKcGd8Px1bQcBhP-ecEA" name="Lhs">
+      <nodes xmi:id="_G0KGrbOUW32-dihj4g0S4g" name="model">
+        <type href="http://example.org/my_shop#//Model"/>
+      </nodes>
+      <formula xsi:type="henshin:Not" xmi:id="_EPNpgSBV7Ktre-AfIEXC1Q">
+        <child xsi:type="henshin:NestedCondition" xmi:id="_mqI6ey0hyrwMVMzEYYDdVg">
+          <conclusion xmi:id="_PvfHpU1ghaXr-kCiGN0HkA" name="forbid">
+            <nodes xmi:id="_YlWAdepLROHZkV46KxtlYg" name="model" outgoing="_gGzYuMU0IHoEk5GJ31DtuQ">
+              <type href="http://example.org/my_shop#//Model"/>
+            </nodes>
+            <nodes xmi:id="_eSvLTDZLROHZkWPXkF6cDQ" name="other" incoming="_gGzYuMU0IHoEk5GJ31DtuQ">
+              <type href="http://example.org/my_shop#//Element"/>
+              <attributes xmi:id="_xW9tdPJxlBLXM96myfz5Rg" value="name">
+                <type href="http://example.org/my_shop#//Element/name"/>
+              </attributes>
+            </nodes>
+            <edges xmi:id="_gGzYuMU0IHoEk5GJ31DtuQ" source="_YlWAdepLROHZkV46KxtlYg" target="_eSvLTDZLROHZkWPXkF6cDQ">
+              <type href="http://example.org/my_shop#//Model/elements"/>
+            </edges>
+          </conclusion>
+          <mappings xmi:id="_bQDGIWzWQPsXB64hS2lDzA" origin="_G0KGrbOUW32-dihj4g0S4g" image="_YlWAdepLROHZkV46KxtlYg"/>
+        </child>
+      </formula>
+    </lhs>
+    <rhs xmi:id="_VDVAYgl8Px1bQcBhcD_2Wg" name="Rhs">
+      <nodes xmi:id="_7e8Xyv4hDSbYyu18pwodrA" name="model" outgoing="_M57ly_UzLrKm_KZw6S-P6Q">
+        <type href="http://example.org/my_shop#//Model"/>
+      </nodes>
+      <nodes xmi:id="_fWVDshqilfJ1pyPjnDFmMQ" name="element" incoming="_M57ly_UzLrKm_KZw6S-P6Q">
+        <type href="http://example.org/my_shop#//Element"/>
+        <attributes xmi:id="_cztgZS0YFiAEWIJ1ItN2Wg" value="name">
+          <type href="http://example.org/my_shop#//Element/name"/>
+        </attributes>
+      </nodes>
+      <edges xmi:id="_M57ly_UzLrKm_KZw6S-P6Q" source="_7e8Xyv4hDSbYyu18pwodrA" target="_fWVDshqilfJ1pyPjnDFmMQ">
+        <type href="http://example.org/my_shop#//Model/elements"/>
+      </edges>
+    </rhs>
+    <mappings xmi:id="_cR1Ww6NP5QmWLZ8VkhBysA" origin="_G0KGrbOUW32-dihj4g0S4g" image="_7e8Xyv4hDSbYyu18pwodrA"/>
+  </units>
+  <units xsi:type="henshin:Rule" xmi:id="__N1GBKiGTRQ--hxNNOws7w" name="addDependency">
+    <parameters xmi:id="_Hfcrn_NRst09ZOJLcz5v8Q" name="from" kind="IN">
+      <type xsi:type="ecore:EDataType" href="http://www.eclipse.org/emf/2002/Ecore#//EString"/>
+    </parameters>
+    <parameters xmi:id="_GARs8hvcoGMe14VZbO_VWA" name="to" kind="IN">
+      <type xsi:type="ecore:EDataType" href="http://www.eclipse.org/emf/2002/Ecore#//EString"/>
+    </parameters>
+    <lhs xmi:id="_vxPbU-0Bfg_BBz2vopsU7Q" name="Lhs">
+      <nodes xmi:id="_vuyjJATbXHmV3H9NQbBNrQ" name="source">
+        <type href="http://example.org/my_shop#//Element"/>
+        <attributes xmi:id="_gQOElS_bNxP_69MxcAHDZg" value="from">
+          <type href="http://example.org/my_shop#//Element/name"/>
+        </attributes>
+      </nodes>
+      <nodes xmi:id="_lDp0FDLbXHmV4WwUMcz2IQ" name="target">
+        <type href="http://example.org/my_shop#//Element"/>
+        <attributes xmi:id="_KGm_TTUXOKJztMn23fkTyg" value="to">
+          <type href="http://example.org/my_shop#//Element/name"/>
+        </attributes>
+      </nodes>
+    </lhs>
+    <rhs xmi:id="_vxP3MYsBfg_BBz2vrijA8w" name="Rhs">
+      <nodes xmi:id="_0B_G6atuYjiVh4C0HW82Mw" name="source" outgoing="_1N1hw8xZYEa9pfVN56RfVQ">
+        <type href="http://example.org/my_shop#//Element"/>
+        <attributes xmi:id="_Zdr3IDbK6QkfNfOcJEA2PA" value="from">
+          <type href="http://example.org/my_shop#//Element/name"/>
+        </attributes>
+      </nodes>
+      <nodes xmi:id="_frxJYw1uYjiVfq3kVVXK7w" name="target" incoming="_1N1hw8xZYEa9pfVN56RfVQ">
+        <type href="http://example.org/my_shop#//Element"/>
+        <attributes xmi:id="_jH0NW435NbORbKCpXuflmA" value="to">
+          <type href="http://example.org/my_shop#//Element/name"/>
+        </attributes>
+      </nodes>
+      <edges xmi:id="_1N1hw8xZYEa9pfVN56RfVQ" source="_0B_G6atuYjiVh4C0HW82Mw" target="_frxJYw1uYjiVfq3kVVXK7w">
+        <type href="http://example.org/my_shop#//Element/dependencies"/>
+      </edges>
+    </rhs>
+    <mappings xmi:id="_7e6zldLQ0spzKLI8_y0lYQ" origin="_vuyjJATbXHmV3H9NQbBNrQ" image="_0B_G6atuYjiVh4C0HW82Mw"/>
+    <mappings xmi:id="__rGJtNDQ0spzEIg6FvcL7Q" origin="_lDp0FDLbXHmV4WwUMcz2IQ" image="_frxJYw1uYjiVfq3kVVXK7w"/>
+  </units>
+</henshin:Module>

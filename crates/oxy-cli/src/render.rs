@@ -28,7 +28,7 @@ impl Renderer {
         self.paint("1;33", s)
     }
 
-    fn ok(&self, s: &str) -> String {
+    pub fn ok(&self, s: &str) -> String {
         self.paint("32", s)
     }
 

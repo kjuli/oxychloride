@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use oxychloride::{Diagnostic, Language, ObjectRef, RegistryEntry, Severity, ValidateOptions, Workspace};
+use oxychloride::{
+    Diagnostic, Language, MetamodelFormat, NewProjectRequest, ObjectRef, Project, RegistryEntry, Severity,
+    ValidateOptions, Workspace,
+};
 
 use render::Renderer;
 
@@ -47,6 +50,39 @@ enum ConvertTo {
     HenshinText,
 }
 
+/// The documents of a new project besides its metamodel.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum Part {
+    /// Constraints in Complete OCL (`.ocl`).
+    Ocl,
+    /// A model in HUTN (`.hutn`).
+    Hutn,
+    /// A model in XMI (`.xmi`).
+    Xmi,
+    /// A Henshin transformation as text (`.henshin_text`).
+    Henshin,
+    /// A Henshin transformation as Henshin's editors write it (`.henshin`).
+    HenshinModel,
+    /// A QVT Operational Mappings transformation (`.qvto`).
+    Qvto,
+    /// A QVT Relations transformation (`.qvtr`).
+    Qvtr,
+}
+
+impl Part {
+    fn language(self) -> Language {
+        match self {
+            Part::Ocl => Language::Ocl,
+            Part::Hutn => Language::Hutn,
+            Part::Xmi => Language::Xmi,
+            Part::Henshin => Language::Henshin,
+            Part::HenshinModel => Language::HenshinModel,
+            Part::Qvto => Language::Qvto,
+            Part::Qvtr => Language::Qvtr,
+        }
+    }
+}
+
 #[derive(clap::Args)]
 struct Inputs {
     /// Metamodels to load: `.ecore` files or OCLinEcore documents (`.oclinecore`). Imports in
@@ -67,14 +103,52 @@ struct Inputs {
 enum Command {
     /// Parse and check documents: Complete OCL, OCLinEcore metamodels, HUTN models (for
     /// models, the constraints their objects violate are reported too), Henshin
-    /// transformations (as text or as `.henshin` files) and QVT transformations.
+    /// transformations (as text or as `.henshin` files) and QVT transformations. Without
+    /// documents, all documents of the project (`oxychloride.json`) the current directory is
+    /// in, with its package registry: models (HUTN and XMI) are checked against all
+    /// constraints.
     Check {
-        /// Documents (`.ocl`, `.oclinecore`, `.hutn`, `.henshin_text`, `.henshin`, `.qvto`,
-        /// `.qvtr`).
-        #[arg(required = true)]
+        /// Documents (`.ocl`, `.oclinecore`, `.hutn`, `.xmi`, `.henshin_text`, `.henshin`,
+        /// `.qvto`, `.qvtr`).
         documents: Vec<PathBuf>,
+        /// Check the project in this folder (or with this manifest) instead.
+        #[arg(long, value_name = "DIR", conflicts_with = "documents")]
+        project: Option<PathBuf>,
         #[command(flatten)]
         inputs: Inputs,
+    },
+    /// Create a modeling project: a manifest (`oxychloride.json`), a metamodel, and
+    /// constraints, a model and transformations of it to start from (all free of errors).
+    New {
+        /// The folder of the project (created if needed).
+        dir: PathBuf,
+        /// The project's name; its metamodel's package is named after it (default: the
+        /// folder's name).
+        #[arg(long)]
+        name: Option<String>,
+        /// A sentence about the project (for the manifest and the README).
+        #[arg(long)]
+        description: Option<String>,
+        /// The nsURI of the metamodel's package (default: `http://example.org/<package>`).
+        #[arg(long, value_name = "URI")]
+        ns_uri: Option<String>,
+        /// Write the metamodel as an `.ecore` file (registered in the project's package
+        /// registry) instead of an OCLinEcore document.
+        #[arg(long)]
+        ecore: bool,
+        /// The documents to create besides the metamodel (default: all of them).
+        #[arg(long = "with", value_enum, value_delimiter = ',', value_name = "KIND", conflicts_with = "bare")]
+        with: Vec<Part>,
+        /// Only the manifest and the metamodel.
+        #[arg(long)]
+        bare: bool,
+        /// The code generation target of the manifest (`oxy generate`, and VS Code's
+        /// *Generate Code…*, use it for the project).
+        #[arg(long, value_parser = targets())]
+        codegen: Option<String>,
+        /// Replace files that exist.
+        #[arg(long)]
+        force: bool,
     },
     /// Validate models: evaluate the invariants of OCL documents and of the metamodels, and
     /// check the pre- and postconditions of operations.
@@ -267,6 +341,52 @@ fn load(ws: &mut Workspace, inputs: &Inputs, warnings: &mut Vec<Diagnostic>) -> 
     Ok(documents)
 }
 
+/// The project in `dir` (or with the manifest `dir`), else the one the current directory is in.
+/// Its folder is relative to the current directory when it is below it.
+fn find_project(dir: Option<PathBuf>) -> Result<Project, String> {
+    let manifest = match dir {
+        Some(dir) => dir,
+        None => {
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            let found = Project::find(&cwd).ok_or_else(|| {
+                format!("no documents given, and no project here: no {} in this folder or above", oxychloride::MANIFEST)
+            })?;
+            let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+            match found.strip_prefix(&cwd) {
+                Ok(relative) => relative.to_path_buf(),
+                Err(_) => found,
+            }
+        }
+    };
+    Project::load(&manifest).map_err(|e| e.to_string())
+}
+
+/// Opens the documents of a project, with its package registry plus the `--map`s, and loads
+/// the further metamodels and models of `inputs`. Returns the names of the documents.
+fn load_project(
+    ws: &mut Workspace,
+    project: &Project,
+    inputs: &Inputs,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<Vec<String>, String> {
+    let mut project = project.clone();
+    for m in &inputs.map {
+        let (from, to) = m.split_once('=').ok_or_else(|| format!("invalid --map '{m}' (expected URI=PATH)"))?;
+        if Path::new(to).is_file() {
+            let to = std::path::absolute(to).map_err(|e| e.to_string())?;
+            project.manifest.registry.insert(from.to_string(), to.to_string_lossy().into_owned());
+        } else {
+            ws.map_uri(from, to);
+        }
+    }
+    let loaded = ws.open_project(&project);
+    warnings.extend(loaded.problems);
+    let extra = Inputs { ecore: inputs.ecore.clone(), model: inputs.model.clone(), map: Vec::new() };
+    let mut documents = loaded.documents;
+    documents.extend(load(ws, &extra, warnings)?);
+    Ok(documents)
+}
+
 /// Opens documents (OCLinEcore documents first: the others may depend on them).
 fn open_documents(ws: &mut Workspace, documents: &[PathBuf]) -> Result<Vec<String>, String> {
     let mut sorted: Vec<&PathBuf> = documents.iter().collect();
@@ -302,9 +422,18 @@ fn run(command: Command, format: Format, r: &Renderer) -> Result<bool, String> {
     let mut ws = Workspace::new();
     let mut warnings = Vec::new();
     match command {
-        Command::Check { documents, inputs } => {
-            load(&mut ws, &inputs, &mut warnings)?;
-            let names = open_documents(&mut ws, &documents)?;
+        Command::Check { documents, project, inputs } => {
+            let names = if documents.is_empty() {
+                let project = find_project(project)?;
+                let opened = load_project(&mut ws, &project, &inputs, &mut warnings)?;
+                if format == Format::Text {
+                    println!("{} {}", r.dim("project"), project.manifest.name);
+                }
+                opened
+            } else {
+                load(&mut ws, &inputs, &mut warnings)?;
+                open_documents(&mut ws, &documents)?
+            };
             let mut diags = warnings;
             for n in &names {
                 diags.extend(ws.diagnostics(Some(n)));
@@ -319,6 +448,58 @@ fn run(command: Command, format: Format, r: &Renderer) -> Result<bool, String> {
                 println!("{}", r.diagnostic_summary(&diags, names.len()));
             }
             Ok(!has_errors(&diags))
+        }
+        Command::New { dir, name, description, ns_uri, ecore, with, bare, codegen, force } => {
+            let name = match name {
+                Some(name) => name,
+                None => std::path::absolute(&dir)
+                    .ok()
+                    .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .ok_or_else(|| format!("{} has no name: give one with --name", dir.display()))?,
+            };
+            let include = if bare {
+                Some(Vec::new())
+            } else if with.is_empty() {
+                None
+            } else {
+                Some(with.iter().map(|p| p.language()).collect())
+            };
+            let request = NewProjectRequest {
+                name,
+                description,
+                ns_uri,
+                metamodel: if ecore { MetamodelFormat::Ecore } else { MetamodelFormat::OclInEcore },
+                include,
+                codegen,
+            };
+            let project = Workspace::new_project(&request).map_err(|e| e.to_string())?;
+            let paths: Vec<PathBuf> = project.files.iter().map(|f| dir.join(&f.path)).collect();
+            if !force && let Some(existing) = paths.iter().find(|p| p.exists()) {
+                return Err(format!("{} exists (use --force to replace it)", existing.display()));
+            }
+            for (file, path) in project.files.iter().zip(&paths) {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+                }
+                std::fs::write(path, &file.text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            }
+            if format == Format::Json {
+                let files: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                print_json(&serde_json::json!({ "package": project.package, "nsUri": project.ns_uri, "files": files }));
+            } else {
+                for path in &paths {
+                    println!("  {}", path.display());
+                }
+                println!(
+                    "{} created {} ({} files; package {}, nsURI {})",
+                    r.ok("✓"),
+                    dir.display(),
+                    paths.len(),
+                    project.package,
+                    project.ns_uri
+                );
+            }
+            Ok(true)
         }
         Command::Run { documents, inputs, no_ecore, no_contracts, all } => {
             let mut opened = load(&mut ws, &inputs, &mut warnings)?;

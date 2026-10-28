@@ -1717,3 +1717,80 @@ pub struct QvtRunResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aborted: Option<String>,
 }
+
+// ---------------------------------------------------------------------- projects
+
+/// How the metamodel of a new project is written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MetamodelFormat {
+    /// An OCLinEcore document (`.oclinecore`): Ecore with embedded OCL, as text.
+    #[default]
+    #[serde(rename = "oclinecore")]
+    OclInEcore,
+    /// An `.ecore` file (Ecore's XML), registered in the project's package registry.
+    Ecore,
+}
+
+/// What `newProject` creates: a modeling project around one metamodel.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewProjectRequest {
+    /// The project's name; the metamodel's package is named after it (`My Shop` → `my_shop`).
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The nsURI of the metamodel's package (default: `http://example.org/<package>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ns_uri: Option<String>,
+    #[serde(default)]
+    pub metamodel: MetamodelFormat,
+    /// The documents to create besides the metamodel, by language: `ocl` (constraints),
+    /// `hutn` and `xmi` (a model), `henshin` and `henshinModel` (a Henshin transformation as
+    /// text and as a `.henshin` file; both: a pair kept equivalent), `qvto` and `qvtr` (a QVT
+    /// transformation). Default: all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<Language>>,
+    /// The code generation target of the manifest's `codegen` (`python`, `rust`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codegen: Option<String>,
+}
+
+/// A file of a new project.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFile {
+    /// Relative to the project folder, with `/` separators.
+    pub path: String,
+    pub text: String,
+}
+
+/// The result of `newProject`. The files are returned, not written.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewProject {
+    /// The name of the metamodel's package.
+    pub package: String,
+    pub ns_uri: String,
+    /// The manifest (`oxychloride.json`) first, then the documents, then the rest.
+    pub files: Vec<ProjectFile>,
+}
+
+/// What `newDocument` writes: the starting point of a document about loaded metamodels.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewDocumentRequest {
+    /// `oclinecore`, `ocl`, `hutn`, `qvto` or `qvtr`.
+    pub language: Language,
+    /// The name of the new metamodel's package (OCLinEcore) or of the transformation (QVT);
+    /// other documents mention it in their comment.
+    pub name: String,
+    /// Qualified names of loaded packages: those the Complete OCL document constrains, the
+    /// metamodel of the model (HUTN: the first), the metamodels a QVT transformation
+    /// transforms (from the first to the last).
+    #[serde(default)]
+    pub packages: Vec<String>,
+    /// OCLinEcore: the new package's nsURI (default: `http://example.org/<name>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ns_uri: Option<String>,
+}

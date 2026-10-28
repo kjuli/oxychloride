@@ -11,6 +11,22 @@ the `oxy` CLI.
 
 ## Features
 
+- **Modeling projects:** **New Modeling Project…** (Command Palette, the *Modeling Projects*
+  view, an Explorer folder's context menu, the empty Explorer) creates a folder with a
+  manifest, `oxychloride.json`, a metamodel (OCLinEcore or Ecore) named after the project, and
+  — as you choose — constraints in Complete OCL, a model in HUTN and in XMI, Henshin rules (as
+  text and as a diagram) and QVT transformations (Operational and Relations) of it, all free of
+  errors; then it opens the project (here, in a new window, or added to the workspace). **Make
+  Folder a Modeling Project** adds a manifest to an existing folder. The **Modeling Projects**
+  view shows each project's documents by kind — metamodels, constraints, models, Henshin and
+  QVT transformations — with their actions in the context menus; **+** on a kind creates a new
+  document of it in the folder the manifest names for it (a metamodel, constraints importing
+  chosen packages, a HUTN or XMI model, a Henshin transformation, a QVT transformation between
+  two metamodels with a mapping of their root classes). **Validate Project** checks all models
+  of the project, also those not open; **Generate Code of Project** generates code with the
+  manifest's `codegen` settings. A project's package registry lives in its manifest:
+  registering a file of the project writes it there. See
+  [docs/PROJECTS.md](../docs/PROJECTS.md).
 - **Languages:** Complete OCL (`.ocl`), OCLinEcore (`.oclinecore`) and HUTN (`.hutn`) (and QVT, below) with
   highlighting, bracket handling, comments, hover (types of OCL expressions, classes and
   features) and completion that proposes what the metamodel allows (features, operations,
@@ -156,6 +172,10 @@ the `oxy` CLI.
   language icons, such as the default Seti).
 
 ## Getting started
+
+Run **Oxychloride: New Modeling Project…** and press Enter at each step: you get a project
+with a metamodel, a model, constraints and transformations to start from, and the *Modeling
+Projects* view in the Oxychloride bar to work with it. Or:
 
 Open a folder with an `.oclinecore` metamodel (e.g. `examples/university` of the
 repository), then its `.hutn` model: the Problems view lists the five violated constraints.

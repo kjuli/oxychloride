@@ -1,0 +1,21 @@
+-- A transformation of my_shop models in QVT Operational Mappings: it copies a model,
+-- element by element. Run it on a model with "Run QVT Transformation…".
+
+modeltype MY_SHOP uses 'http://example.org/my_shop';
+
+transformation copy(in source : MY_SHOP, out target : MY_SHOP);
+
+main() {
+	source.rootObjects()[MY_SHOP::Model]->map toModel();
+}
+
+mapping MY_SHOP::Model::toModel() : MY_SHOP::Model {
+	name := self.name;
+	elements := self.elements->map toElement();
+}
+
+-- The copies of the dependencies may not exist yet: `late` resolves them at the end.
+mapping MY_SHOP::Element::toElement() : MY_SHOP::Element {
+	name := self.name;
+	dependencies := self.dependencies.late resolveone(MY_SHOP::Element);
+}

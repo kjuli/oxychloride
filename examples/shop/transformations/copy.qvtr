@@ -1,0 +1,25 @@
+-- A transformation of my_shop models in QVT Relations: run in the direction of `target`,
+-- it creates a model with the elements of the source model; in check mode, it reports the
+-- elements the target lacks. Run it on a model with "Run QVT Transformation…".
+
+import my_shop : 'http://example.org/my_shop';
+
+transformation copy(source : my_shop, target : my_shop) {
+	-- Objects with the same values of these properties are the same object: enforcing a
+	-- relation finds them instead of creating others.
+	key my_shop::Model { name };
+	key my_shop::Element { model, name };
+
+	top relation ModelToModel {
+		n : String;
+		checkonly domain source s : my_shop::Model { name = n };
+		enforce domain target t : my_shop::Model { name = n };
+		where { ElementToElement(s, t); }
+	}
+
+	relation ElementToElement {
+		n : String;
+		checkonly domain source s : my_shop::Model { elements = e : my_shop::Element { name = n } };
+		enforce domain target t : my_shop::Model { elements = f : my_shop::Element { name = n } };
+	}
+}

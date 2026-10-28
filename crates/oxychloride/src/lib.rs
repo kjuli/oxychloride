@@ -7,6 +7,8 @@
 //! * [`rpc::Server`] — the same functionality as JSON-RPC 2.0, used by `oxy serve`, the
 //!   C ABI (`oxy-ffi`) and the language server (`oxy-lsp`).
 //! * [`protocol`] — the serializable request/response types.
+//! * [`project`] — modeling projects: a folder with a manifest (`oxychloride.json`), its
+//!   documents, and new projects and documents from templates.
 //!
 //! The lower layers are re-exported as [`ecore`] (metamodels and models), [`ocl`]
 //! (parser, type checker, evaluator), [`henshin`] (graph transformations), [`qvt`] (QVT
@@ -39,6 +41,7 @@ mod diagram;
 mod editor;
 mod generate;
 mod henshin_documents;
+pub mod project;
 pub mod protocol;
 mod qvt_documents;
 mod registry;
@@ -54,6 +57,7 @@ pub use oxy_ecore as ecore;
 pub use oxy_henshin as henshin;
 pub use oxy_ocl as ocl;
 pub use oxy_qvt as qvt;
+pub use project::{MANIFEST, Project, ProjectLoad, ProjectManifest};
 pub use protocol::*;
 pub use transform::ExploreRequest;
 pub use workspace::{Compiled, Error, ValidateOptions, Workspace};

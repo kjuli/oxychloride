@@ -1,0 +1,27 @@
+-- The metamodel of my_shop in OCLinEcore: classes with their features, operations and
+-- constraints. A starting point: rename, add and remove elements as you need, as text or in
+-- the diagram ("Open Metamodel Diagram").
+
+package my_shop : my_shop = 'http://example.org/my_shop' {
+  -- The root of a model: it contains all elements.
+  class Model {
+    attribute name : String[1];
+    property elements#model : Element[*] { ordered, composes };
+
+    invariant UniqueNames('Two elements are named alike'): elements->isUnique(name);
+  }
+
+  class Element {
+    attribute name : String[1];
+    property model#elements : Model[?];
+    -- Other elements this one depends on.
+    property dependencies : Element[*];
+
+    -- The elements this one depends on, directly or not.
+    operation allDependencies() : Element[*] {
+      body: dependencies->closure(dependencies)->asSet();
+    }
+
+    invariant HasName: name.size() > 0;
+  }
+}

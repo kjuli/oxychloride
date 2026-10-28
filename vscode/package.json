@@ -1,7 +1,7 @@
 {
   "name": "oxychloride",
   "displayName": "Oxychloride: OCL for Ecore models",
-  "description": "Metamodels in OCLinEcore and Ecore, edited as text or as diagrams; models in HUTN and XMI, checked live against their OCL invariants, pre- and postconditions; an OCL console; Henshin graph transformations, as text or as rule diagrams in Henshin's notation (.henshin files of Henshin's editors included, kept equivalent to their text), with a step-by-step view and state space exploration; QVT model transformations (Operational Mappings and Relations), checked as you type and run on models from the context menu.",
+  "description": "Modeling projects that hold metamodels, constraints, models and transformations; metamodels in OCLinEcore and Ecore, edited as text or as diagrams; models in HUTN and XMI, checked live against their OCL invariants, pre- and postconditions; an OCL console; Henshin graph transformations, as text or as rule diagrams in Henshin's notation (.henshin files of Henshin's editors included, kept equivalent to their text), with a step-by-step view and state space exploration; QVT model transformations (Operational Mappings and Relations), checked as you type and run on models from the context menu.",
   "version": "0.1.0",
   "publisher": "palladio",
   "repository": {
@@ -33,6 +33,7 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "workspaceContains:**/*.{ocl,oclinecore,hutn,xmi,ecore,henshin_text,henshin,qvto,qvtr}",
+    "workspaceContains:**/oxychloride.json",
     "onLanguage:xml"
   ],
   "contributes": {
@@ -249,6 +250,10 @@
     "views": {
       "oxychloride": [
         {
+          "id": "oxychloride.projects",
+          "name": "Modeling Projects"
+        },
+        {
           "id": "oxychloride.metamodels",
           "name": "Metamodels"
         },
@@ -275,6 +280,10 @@
     },
     "viewsWelcome": [
       {
+        "view": "oxychloride.projects",
+        "contents": "No modeling project. A modeling project is a folder with a manifest, oxychloride.json, holding metamodels (OCLinEcore, Ecore), constraints (Complete OCL), models (HUTN, XMI) and transformations (Henshin, QVT).\n[New Modeling Project…](command:oxychloride.newProject)\n[Make Folder a Modeling Project](command:oxychloride.initProject)"
+      },
+      {
         "view": "oxychloride.metamodels",
         "contents": "No metamodel loaded. Write one in an .oclinecore file, or register an .ecore file in the package registry.\n[Register Metamodel…](command:oxychloride.registerMetamodel)"
       },
@@ -289,9 +298,73 @@
       {
         "view": "oxychloride.validation",
         "contents": "Check the models against all invariants, pre- and postconditions.\n[Validate Models](command:oxychloride.validate)"
+      },
+      {
+        "view": "explorer",
+        "contents": "Model with metamodels, OCL constraints and model transformations:\n[New Modeling Project…](command:oxychloride.newProject)",
+        "when": "workbenchState == empty"
       }
     ],
     "commands": [
+      {
+        "command": "oxychloride.newProject",
+        "title": "New Modeling Project…",
+        "category": "Oxychloride",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "oxychloride.initProject",
+        "title": "Make Folder a Modeling Project",
+        "category": "Oxychloride"
+      },
+      {
+        "command": "oxychloride.project.newMetamodel",
+        "title": "New Metamodel…",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.project.newConstraints",
+        "title": "New Constraints…",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.project.newModel",
+        "title": "New Model…",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.project.newHenshin",
+        "title": "New Henshin Transformation in Project…",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.project.newQvt",
+        "title": "New QVT Transformation…",
+        "category": "Oxychloride",
+        "icon": "$(add)"
+      },
+      {
+        "command": "oxychloride.validateProject",
+        "title": "Validate Project",
+        "category": "Oxychloride",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "oxychloride.generateProjectCode",
+        "title": "Generate Code of Project",
+        "category": "Oxychloride",
+        "icon": "$(code)"
+      },
+      {
+        "command": "oxychloride.openManifest",
+        "title": "Open Project Manifest",
+        "category": "Oxychloride",
+        "icon": "$(settings-gear)"
+      },
       {
         "command": "oxychloride.createInstance",
         "title": "Create Instance",
@@ -505,6 +578,20 @@
     "menus": {
       "view/title": [
         {
+          "command": "oxychloride.newProject",
+          "when": "view == oxychloride.projects",
+          "group": "navigation@1"
+        },
+        {
+          "command": "oxychloride.refresh",
+          "when": "view == oxychloride.projects",
+          "group": "navigation@2"
+        },
+        {
+          "command": "oxychloride.initProject",
+          "when": "view == oxychloride.projects"
+        },
+        {
           "command": "oxychloride.refresh",
           "when": "view == oxychloride.metamodels || view == oxychloride.models || view == oxychloride.registry",
           "group": "navigation"
@@ -555,6 +642,156 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "oxychloride.project.newMetamodel",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.metamodels",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.project.newMetamodel",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.metamodels",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.project.newConstraints",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.constraints",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.project.newConstraints",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.constraints",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.project.newModel",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.models",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.project.newModel",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.models",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.project.newHenshin",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.henshin",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.project.newHenshin",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.henshin",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.project.newQvt",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.qvt",
+          "group": "inline"
+        },
+        {
+          "command": "oxychloride.project.newQvt",
+          "when": "view == oxychloride.projects && viewItem == projectCategory.qvt",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.validateProject",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "inline@1"
+        },
+        {
+          "command": "oxychloride.openManifest",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "inline@2"
+        },
+        {
+          "command": "oxychloride.project.newMetamodel",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "1_create@1"
+        },
+        {
+          "command": "oxychloride.project.newConstraints",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "1_create@2"
+        },
+        {
+          "command": "oxychloride.project.newModel",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "1_create@3"
+        },
+        {
+          "command": "oxychloride.project.newHenshin",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "1_create@4"
+        },
+        {
+          "command": "oxychloride.project.newQvt",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "1_create@5"
+        },
+        {
+          "command": "oxychloride.validateProject",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "2_project@1"
+        },
+        {
+          "command": "oxychloride.generateProjectCode",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "2_project@2"
+        },
+        {
+          "command": "oxychloride.openManifest",
+          "when": "view == oxychloride.projects && viewItem == project",
+          "group": "2_project@3"
+        },
+        {
+          "command": "oxychloride.openDiagram",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(oclinecore|ecore)$/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "oxychloride.openRuleDiagram",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(henshin_text|henshin)$/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "oxychloride.openTransformation",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(henshin_text|henshin)$/",
+          "group": "1_open@2"
+        },
+        {
+          "command": "oxychloride.exploreStateSpace",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(henshin_text|henshin)$/",
+          "group": "1_open@3"
+        },
+        {
+          "command": "oxychloride.runQvt",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(qvto|qvtr|hutn|xmi)$/",
+          "group": "2_run@1"
+        },
+        {
+          "command": "oxychloride.instantiateMetamodel",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(oclinecore|ecore)$/",
+          "group": "2_run@1"
+        },
+        {
+          "command": "oxychloride.newHenshinTransformation",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(oclinecore|ecore|hutn|xmi)$/",
+          "group": "2_run@2"
+        },
+        {
+          "command": "oxychloride.generateCode",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(oclinecore|ecore)$/",
+          "group": "2_run@3"
+        },
+        {
+          "command": "oxychloride.generateEcore",
+          "when": "view == oxychloride.projects && viewItem == projectFile.oclinecore",
+          "group": "2_run@4"
+        },
+        {
+          "command": "oxychloride.convertToText",
+          "when": "view == oxychloride.projects && viewItem =~ /^projectFile\\.(ecore|xmi)$/",
+          "group": "2_run@4"
+        },
         {
           "command": "oxychloride.createInstance",
           "when": "view == oxychloride.metamodels && viewItem == class",
@@ -721,6 +958,16 @@
         }
       ],
       "explorer/context": [
+        {
+          "command": "oxychloride.newProject",
+          "when": "explorerResourceIsFolder",
+          "group": "7_modification"
+        },
+        {
+          "command": "oxychloride.initProject",
+          "when": "explorerResourceIsFolder",
+          "group": "7_modification"
+        },
         {
           "command": "oxychloride.openDiagram",
           "when": "resourceExtname == .ecore || resourceExtname == .oclinecore",
@@ -908,6 +1155,12 @@
           }
         ],
         "priority": "default"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": "oxychloride.json",
+        "url": "./schemas/oxychloride.schema.json"
       }
     ]
   },

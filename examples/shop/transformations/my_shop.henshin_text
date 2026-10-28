@@ -1,0 +1,33 @@
+// In-place transformations of my_shop models in Henshin's textual syntax. Open a model,
+// then "Open Transformation" on this file to apply the rules step by step, or open the rule
+// diagram.
+
+ePackageImport my_shop
+
+// Adds an element to a model, unless the model has an element of that name.
+rule addElement(IN name:EString) {
+	graph {
+		node model:Model
+		create node element:Element {
+			name=name
+		}
+		edges [(create model->element:elements)]
+		forbid node other:Element {
+			name=name
+		}
+		edges [(forbid model->other:elements)]
+	}
+}
+
+// Makes an element depend on another.
+rule addDependency(IN from:EString, IN to:EString) {
+	graph {
+		node source:Element {
+			name=from
+		}
+		node target:Element {
+			name=to
+		}
+		edges [(create source->target:dependencies)]
+	}
+}

@@ -24,16 +24,20 @@ export type CodeSource = { uri: vscode.Uri } | { resource: string; label: string
 const LAST_TARGET = "oxychloride.codegen.lastTarget";
 const folderKey = (resource: string) => `oxychloride.codegen.folder:${resource}`;
 
+/** The defaults for a metamodel file (or folder): its modeling project's `codegen`. */
+export type CodegenDefaults = (near: vscode.Uri | undefined) => { target?: string; outputFolder?: vscode.Uri };
+
 export class CodeGenerator {
   constructor(
     private readonly engine: Engine,
     private readonly state: vscode.Memento,
     private readonly output: vscode.LogOutputChannel,
+    private readonly defaults: CodegenDefaults = () => ({}),
   ) {}
 
   /** Generates code and writes it: asks for the language and the output folder unless given
-   * (by `options`, or the settings `oxychloride.codegen.target` and
-   * `oxychloride.codegen.outputFolder`). */
+   * (by `options`, the `codegen` of the metamodel's modeling project, or the settings
+   * `oxychloride.codegen.target` and `oxychloride.codegen.outputFolder`). */
   async generate(source: CodeSource, options: GenerateOptions = {}): Promise<GeneratedCode | undefined> {
     let resource: string;
     let label: string;
@@ -59,9 +63,10 @@ export class CodeGenerator {
       return undefined;
     }
 
-    const target = options.target ?? (await this.pickTarget(label));
+    const project = this.defaults("uri" in source ? source.uri : near);
+    const target = options.target ?? project.target ?? (await this.pickTarget(label));
     if (!target) return undefined;
-    const folder = options.outputFolder ?? (await this.pickFolder(resource, label, near));
+    const folder = options.outputFolder ?? project.outputFolder ?? (await this.pickFolder(resource, label, near));
     if (!folder) return undefined;
 
     let code: GeneratedCode;

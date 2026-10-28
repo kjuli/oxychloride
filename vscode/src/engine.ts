@@ -737,6 +737,38 @@ export interface QvtRunResult {
   aborted?: string;
 }
 
+/** The language of a document (`newProject`'s parts, `newDocument`). */
+export type DocumentLanguage = "ocl" | "oclinecore" | "hutn" | "xmi" | "henshin" | "henshinModel" | "qvto" | "qvtr";
+
+/** What `newProject` creates: a modeling project around one metamodel. */
+export interface NewProjectRequest {
+  name: string;
+  description?: string;
+  /** The nsURI of the metamodel's package (default: `http://example.org/<package>`). */
+  nsUri?: string;
+  /** `oclinecore` (default) or `ecore` (registered in the project's registry). */
+  metamodel?: "oclinecore" | "ecore";
+  /** The documents besides the metamodel (default: all). */
+  include?: DocumentLanguage[];
+  /** The code generation target of the manifest. */
+  codegen?: string;
+}
+
+/** The files of a new project, relative to its folder (the manifest first). */
+export interface NewProject {
+  package: string;
+  nsUri: string;
+  files: { path: string; text: string }[];
+}
+
+/** What `newDocument` writes: a starting point about loaded packages (qualified names). */
+export interface NewDocumentRequest {
+  language: DocumentLanguage;
+  name: string;
+  packages?: string[];
+  nsUri?: string;
+}
+
 export class Engine {
   constructor(private readonly client: () => LanguageClient | undefined) {}
 
@@ -816,6 +848,11 @@ export class Engine {
     this.call<{ transformations: QvtTransformationInfo[] }>("qvtTransformations", model ? { model } : {}).then((r) => r.transformations);
   /** Runs a QVT transformation on copies of the workspace's models; the outputs come back as text. */
   runQvt = (request: QvtRunRequest) => this.call<QvtRunResult>("runQvt", request);
+
+  /** The files of a new modeling project (checked by the engine; not written). */
+  newProject = (request: NewProjectRequest) => this.call<NewProject>("newProject", request);
+  /** The text of a new document about loaded metamodels. */
+  newDocument = (request: NewDocumentRequest) => this.call<{ text: string }>("newDocument", request).then((r) => r.text);
 }
 
 export function errorMessage(e: unknown): string {

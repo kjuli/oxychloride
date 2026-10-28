@@ -1,7 +1,7 @@
 // Drives the extension in a real VS Code: live diagnostics for HUTN and XMI models, the views,
 // creating objects, the OCL console, validation, metamodel diagrams, Henshin transformations and
 // their rule diagrams, keeping a Henshin text and its `.henshin` file equivalent, the package
-// registry, and QVT transformations.
+// registry, QVT transformations, and modeling projects.
 
 import * as assert from "node:assert";
 import * as fs from "node:fs";
@@ -23,6 +23,7 @@ interface Api {
   };
   metamodels: { packages: { name: string; classifiers: { name: string; qualifiedName: string }[] }[] };
   registry: RegistryApi;
+  projects: ProjectsApi;
   models: { models: { uri: string; roots: { fragment: string; label: string; children: unknown[] }[] }[] };
   validation: { report?: { summary: { violated: number } } };
   diagrams(): DiagramView[];
@@ -37,6 +38,18 @@ interface RegistryApi {
   unregister(uri: string): Promise<void>;
   getChildren(): unknown[];
 }
+
+/** The parts of the modeling projects the tests use. */
+interface ProjectsApi {
+  projects: { name: string; root: vscode.Uri; manifestUri: vscode.Uri }[];
+  ready: Promise<void>;
+  load(): Promise<void>;
+  getChildren(node?: unknown): Promise<{ kind: string; uri?: vscode.Uri; category?: { id: string } }[]>;
+  getTreeItem(node: unknown): Promise<vscode.TreeItem>;
+}
+
+type ProjectNode = { kind: "project"; project: ProjectsApi["projects"][number] };
+type ValidationReport = { results: { status: string; object: { resource: string } }[]; summary: { objects: number; violated: number } };
 
 /** The parts of a rule diagram the tests use. */
 interface RuleDiagramView {
@@ -62,10 +75,10 @@ interface TransformationView {
 
 const folder = () => vscode.workspace.workspaceFolders![0].uri.fsPath;
 
-async function waitFor<T>(what: string, check: () => T | undefined | false, timeout = 30000): Promise<T> {
+async function waitFor<T>(what: string, check: () => T | undefined | false | Promise<T | undefined | false>, timeout = 30000): Promise<T> {
   const start = Date.now();
   for (;;) {
-    const value = check();
+    const value = await check();
     if (value) return value;
     if (Date.now() - start > timeout) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, 100));
@@ -588,6 +601,161 @@ describe("Oxychloride", () => {
     assert.ok(check, "the check");
     assert.deepStrictEqual(check.violations, []);
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
+  describe("modeling projects", () => {
+    const plant = () => path.join(folder(), "Plant");
+    const project = () => api.projects.projects.find((p) => p.name === "Plant")!;
+    const node = (): ProjectNode => ({ kind: "project", project: project() });
+    /** The files of a category of a project in the view. */
+    const listed = async (category: string) => {
+      const categories = await api.projects.getChildren(node());
+      const files = await api.projects.getChildren(categories.find((c) => c.category?.id === category));
+      return files.map((f) => path.relative(plant(), f.uri!.fsPath).split(path.sep).join("/"));
+    };
+
+    it("creates a modeling project with the engine's templates", async () => {
+      const manifest = await vscode.commands.executeCommand<vscode.Uri>("oxychloride.newProject", {
+        name: "Plant",
+        parent: vscode.Uri.file(folder()),
+        codegen: "python",
+        open: "none",
+      });
+      assert.strictEqual(manifest?.fsPath, path.join(plant(), "oxychloride.json"));
+      const written = JSON.parse(fs.readFileSync(manifest.fsPath, "utf8"));
+      assert.strictEqual(written.name, "Plant");
+      assert.deepStrictEqual(written.codegen, { target: "python" });
+      for (const file of ["metamodels/plant.oclinecore", "constraints/plant.ocl", "models/example.hutn", "models/example.xmi", "transformations/plant.henshin", "transformations/plant.henshin_text", "transformations/copy.qvto", "transformations/copy.qvtr", "README.md"]) {
+        assert.ok(fs.existsSync(path.join(plant(), file)), file);
+      }
+      await waitFor("the project", () => api.projects.projects.some((p) => p.name === "Plant"));
+
+      // The view shows the documents by kind.
+      const categories = await api.projects.getChildren(node());
+      assert.deepStrictEqual(categories.map((c) => c.category?.id), ["metamodels", "constraints", "models", "henshin", "qvt"]);
+      assert.deepStrictEqual(await listed("models"), ["models/example.hutn", "models/example.xmi"]);
+      assert.deepStrictEqual(await listed("henshin"), ["transformations/plant.henshin", "transformations/plant.henshin_text"]);
+      const item = await api.projects.getTreeItem(node());
+      assert.strictEqual(item.contextValue, "project");
+
+      // The documents are free of errors, the model satisfies its constraints.
+      const model = vscode.Uri.file(path.join(plant(), "models/example.hutn"));
+      await vscode.window.showTextDocument(model);
+      await waitFor("the model", () => api.models.models.some((m) => m.uri === model.fsPath));
+      await waitFor("no problems", () => vscode.languages.getDiagnostics(model).length === 0);
+      for (const file of ["transformations/copy.qvto", "transformations/plant.henshin_text"]) {
+        const uri = vscode.Uri.file(path.join(plant(), file));
+        await vscode.workspace.openTextDocument(uri);
+        await new Promise((r) => setTimeout(r, 500));
+        assert.deepStrictEqual(errors(uri), [], file);
+      }
+    });
+
+    it("refuses names the languages cannot use", async () => {
+      const manifest = await vscode.commands.executeCommand<vscode.Uri | undefined>("oxychloride.newProject", {
+        name: "rule",
+        parent: vscode.Uri.file(folder()),
+        codegen: null,
+        open: "none",
+      });
+      assert.strictEqual(manifest, undefined);
+      assert.ok(!fs.existsSync(path.join(folder(), "rule")));
+    });
+
+    it("validates all models of a project, also those not open", async () => {
+      const model = vscode.Uri.file(path.join(plant(), "models/example.hutn"));
+      const doc = await vscode.workspace.openTextDocument(model);
+      const editor = await vscode.window.showTextDocument(doc);
+      const first = doc.getText().indexOf('Element "first" { name: "first" }');
+      await editor.edit((e) => e.insert(doc.positionAt(first + 'Element "first" { name: "first"'.length), ' dependencies: Element "second"'));
+      await waitFor("the cycle", () => errors(model).some((d) => d.message.includes("'Acyclic'")));
+      const report = await vscode.commands.executeCommand<ValidationReport>("oxychloride.validateProject", node());
+      // The XMI model was not open: it is checked too, and only the project's models are.
+      assert.strictEqual(report.summary.objects, 6);
+      assert.strictEqual(report.summary.violated, 2);
+      assert.ok(report.results.every((r) => r.object.resource.startsWith(plant())), JSON.stringify(report.results));
+      await vscode.commands.executeCommand("workbench.action.files.revert");
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    });
+
+    it("creates documents in the project's folders", async () => {
+      const create = (command: string, options: object) => vscode.commands.executeCommand<vscode.Uri | undefined>(command, node(), options);
+      const metamodel = await create("oxychloride.project.newMetamodel", { name: "Orders" });
+      assert.strictEqual(metamodel?.fsPath, path.join(plant(), "metamodels/orders.oclinecore"));
+      const constraints = await create("oxychloride.project.newConstraints", { packages: ["plant"], name: "more" });
+      assert.strictEqual(constraints?.fsPath, path.join(plant(), "constraints/more.ocl"));
+      const hutn = await create("oxychloride.project.newModel", { language: "hutn", packages: ["plant"], name: "second" });
+      assert.strictEqual(hutn?.fsPath, path.join(plant(), "models/second.hutn"));
+      const qvtr = await create("oxychloride.project.newQvt", { language: "qvtr", packages: ["plant", "plant"], name: "twice" });
+      assert.strictEqual(qvtr?.fsPath, path.join(plant(), "transformations/twice.qvtr"));
+      const henshin = await create("oxychloride.project.newHenshin", { language: "henshin", packages: ["plant"], name: "rules" });
+      assert.strictEqual(henshin?.fsPath, path.join(plant(), "transformations/rules.henshin_text"));
+      for (const uri of [metamodel, constraints, hutn, qvtr, henshin]) {
+        await vscode.workspace.openTextDocument(uri);
+        await waitFor(`${path.basename(uri.fsPath)} without errors`, () => errors(uri).length === 0);
+      }
+      assert.ok(fs.readFileSync(henshin.fsPath, "utf8").includes("ePackageImport plant"));
+      await waitFor("the new files in the view", async () => (await listed("metamodels")).includes("metamodels/orders.oclinecore"));
+      assert.deepStrictEqual(await listed("metamodels"), ["metamodels/orders.oclinecore", "metamodels/plant.oclinecore"]);
+      // Refused: a file that exists.
+      assert.strictEqual(await create("oxychloride.project.newMetamodel", { name: "orders" }), undefined);
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    });
+
+    it("generates code where the manifest says", async () => {
+      // Two metamodels: the one to generate is picked.
+      fs.rmSync(path.join(plant(), "metamodels/orders.oclinecore"));
+      await waitFor("one metamodel", async () => (await listed("metamodels")).length === 1);
+      const code = await vscode.commands.executeCommand<{ target: string }>("oxychloride.generateProjectCode", node());
+      assert.strictEqual(code?.target, "python");
+      assert.ok(fs.existsSync(path.join(plant(), "src-gen/plant/_model.py")));
+    });
+
+    it("keeps the registry of a project in its manifest", async () => {
+      const manifest = await vscode.commands.executeCommand<vscode.Uri>("oxychloride.newProject", {
+        name: "Grid",
+        parent: vscode.Uri.file(folder()),
+        metamodel: "ecore",
+        include: ["xmi"],
+        codegen: null,
+        open: "none",
+      });
+      const grid = path.dirname(manifest.fsPath);
+      await waitFor("the registered metamodel", () =>
+        api.registry.infos.some((i) => i.uri === "http://example.org/grid" && i.status === "loaded"),
+      );
+      const model = vscode.Uri.file(path.join(grid, "models/example.xmi"));
+      await vscode.workspace.openTextDocument(model);
+      await waitFor("the XMI model", () => api.models.models.some((m) => m.uri === model.fsPath));
+      assert.deepStrictEqual(errors(model).filter((d) => d.source === "ocl"), []);
+      // The XML extension validates it with the schema generated for the registered metamodel.
+      await waitFor("no schema problems", () => errors(model).length === 0);
+
+      // Registering a file of the project writes the manifest, not the settings.
+      await api.registry.register(vscode.Uri.file(path.join(grid, "metamodels/grid.ecore")), "platform:/resource/grid/grid.ecore");
+      const written = () => JSON.parse(fs.readFileSync(manifest.fsPath, "utf8")).registry;
+      assert.deepStrictEqual(written(), {
+        "http://example.org/grid": "metamodels/grid.ecore",
+        "platform:/resource/grid/grid.ecore": "metamodels/grid.ecore",
+      });
+      const setting = vscode.workspace.getConfiguration("oxychloride", vscode.Uri.file(folder())).get<Record<string, string>>("registry");
+      assert.deepStrictEqual(setting ?? {}, {});
+      await api.registry.unregister("platform:/resource/grid/grid.ecore");
+      assert.deepStrictEqual(written(), { "http://example.org/grid": "metamodels/grid.ecore" });
+    });
+
+    it("makes a folder a modeling project", async () => {
+      const university = vscode.Uri.file(path.join(folder(), "university"));
+      const manifest = await vscode.commands.executeCommand<vscode.Uri>("oxychloride.initProject", university);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(manifest.fsPath, "utf8")).folders.models, "models");
+      await waitFor("the project", () => api.projects.projects.some((p) => p.name === "university"));
+      const p = api.projects.projects.find((p) => p.name === "university")!;
+      const categories = await api.projects.getChildren({ kind: "project", project: p });
+      const models = await api.projects.getChildren(categories.find((c) => c.category?.id === "models"));
+      // Wherever they are in the folder (the manifest names where new ones go).
+      assert.ok(models.some((f) => f.uri!.fsPath.endsWith("university.hutn")), JSON.stringify(models));
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    });
   });
 
   it("has icons for its languages", () => {

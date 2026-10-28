@@ -1,12 +1,14 @@
 // The package registry: URIs standing for metamodel files, like EMF's package registry and URI
 // map. It is kept in the setting `oxychloride.registry` (`{"<uri>": "<path>"}`, paths relative to
-// the workspace folder), given to the engine — which loads the registered files right away and
+// the workspace folder) and in the manifests of modeling projects (`registry`, paths relative to
+// the project; files of a project are registered there), given to the engine — which loads the registered files right away and
 // reads every reference to a registered URI (`.ecore` hrefs, imports, nsURIs of models,
 // `xsi:schemaLocation`s) from them — and shown in the view "Package Registry".
 
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { errorMessage, type Engine, type RegisteredPackage, type RegisteredResource, type RegistryEntry, type RegistryInfo } from "./engine";
+import type { ModelingProject, Projects } from "./projects";
 
 const SECTION = "oxychloride";
 const SETTING = "registry";
@@ -14,9 +16,11 @@ const SETTING = "registry";
 /** Extensions of files offered for registration (Ecore XML may have any extension). */
 const METAMODEL_EXTENSIONS = ["ecore", "xml", "xmi", "emof"];
 
-/** A registry entry as configured: where it is written, and its location as written. */
+/** A registry entry as configured: where it is written (settings of a folder, or a project's
+ * manifest), and its location as written. */
 interface ConfiguredEntry extends RegistryEntry {
   folder?: vscode.WorkspaceFolder;
+  project?: ModelingProject;
   value: string;
 }
 
@@ -45,11 +49,15 @@ export class PackageRegistry implements vscode.TreeDataProvider<RegistryNode>, v
   /** The entries and their state, as the engine last reported them. */
   infos: RegistryInfo[] = [];
 
-  constructor(private readonly engine: Engine) {}
+  constructor(
+    private readonly engine: Engine,
+    private readonly projects?: Projects,
+  ) {}
 
   // ---------------------------------------------------------------- the setting
 
-  /** The configured entries, with absolute locations (the first folder defining a URI wins). */
+  /** The configured entries, with absolute locations: those of the settings (the first folder
+   * defining a URI wins), then those of the modeling projects. */
   configured(): ConfiguredEntry[] {
     const folders = vscode.workspace.workspaceFolders ?? [];
     const out: ConfiguredEntry[] = [];
@@ -58,6 +66,11 @@ export class PackageRegistry implements vscode.TreeDataProvider<RegistryNode>, v
       for (const [uri, value] of Object.entries(map)) {
         if (typeof value !== "string" || !uri.trim() || out.some((e) => e.uri === uri)) continue;
         out.push({ uri, value, folder, location: resolveLocation(value, folder) });
+      }
+    }
+    for (const project of this.projects?.projects ?? []) {
+      for (const { uri, location } of project.registry()) {
+        if (!out.some((e) => e.uri === uri)) out.push({ uri, value: project.manifest.registry?.[uri] ?? location, project, location });
       }
     }
     return out;
@@ -81,12 +94,25 @@ export class PackageRegistry implements vscode.TreeDataProvider<RegistryNode>, v
   }
 
   /** Writes (or, with `location` undefined, removes) the entries for URIs: where they are
-   * configured, else into the settings of the workspace folder containing `location`. Then
-   * gives the engine the new registry. */
+   * configured, else into the manifest of the modeling project containing `location`, else
+   * into the settings of the workspace folder containing it. Then gives the engine the new
+   * registry. */
   private async write(changes: [uri: string, location: string | undefined][]): Promise<void> {
     const { WorkspaceFolder, Workspace, Global } = vscode.ConfigurationTarget;
     for (const [uri, location] of changes) {
       const existing = this.configured().find((e) => e.uri === uri);
+      const project = existing ? existing.project : location ? this.projects?.projectOf(vscode.Uri.file(location)) : undefined;
+      if (project) {
+        await project.update((m) => {
+          const registry = { ...(m.registry ?? {}) };
+          if (location === undefined) delete registry[uri];
+          else registry[uri] = project.relative(location);
+          m.registry = registry;
+        });
+        // The manifest is read again before the registry goes to the engine.
+        await this.projects?.load();
+        continue;
+      }
       const folder =
         existing?.folder ??
         (location ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(location)) : undefined) ??
@@ -312,7 +338,8 @@ export class PackageRegistry implements vscode.TreeDataProvider<RegistryNode>, v
         const i = node.info;
         const children = this.getChildren(node).length > 0;
         const item = new vscode.TreeItem(i.uri, children ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-        item.description = vscode.workspace.asRelativePath(i.location);
+        const project = this.configured().find((e) => e.uri === i.uri)?.project;
+        item.description = `${vscode.workspace.asRelativePath(i.location)}${project ? ` · ${project.name}` : ""}`;
         const problems = i.status === "missing" || i.status === "error";
         item.iconPath =
           i.status === "folder"
@@ -327,6 +354,7 @@ export class PackageRegistry implements vscode.TreeDataProvider<RegistryNode>, v
           [
             `**${i.uri}**`,
             `→ \`${i.location}\``,
+            project ? `Registered in the modeling project ${project.name} (${vscode.workspace.asRelativePath(project.manifestUri)}).` : "",
             i.status === "folder" ? "URIs starting with this prefix are read from the folder." : "",
             i.message ?? "",
             aliases.length ? `Also known as: ${aliases.map((a) => `\`${a}\``).join(", ")}` : "",

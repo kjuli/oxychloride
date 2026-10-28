@@ -1,0 +1,17 @@
+// A my_shop model in HUTN, checked against the metamodel and the constraints as you type.
+// Add objects with "Create Instance" in the Metamodels view, or "Add Child…" in the Models view.
+
+@Spec {
+  metamodel "my_shop" {
+    nsUri: "http://example.org/my_shop"
+  }
+}
+
+my_shop {
+  Model "example" {
+    name: "example"
+    elements:
+      Element "first" { name: "first" },
+      Element "second" { name: "second" dependencies: Element "first" }
+  }
+}

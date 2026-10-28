@@ -1,0 +1,14 @@
+{
+  "name": "My Shop",
+  "description": "Elements that depend on each other: the project oxy new creates",
+  "folders": {
+    "metamodels": "metamodels",
+    "constraints": "constraints",
+    "models": "models",
+    "transformations": "transformations",
+    "generated": "src-gen"
+  },
+  "codegen": {
+    "target": "python"
+  }
+}

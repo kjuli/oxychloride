@@ -1,0 +1,12 @@
+-- Further constraints on my_shop models in Complete OCL: they are checked like the
+-- invariants of the metamodel, live in the model editors and by "Validate Models".
+
+import 'http://example.org/my_shop'
+
+package my_shop
+
+context Element
+-- An element must not depend on itself, not even indirectly.
+inv Acyclic('Element ' + name + ' depends on itself'): not allDependencies()->includes(self)
+
+endpackage
